@@ -16,6 +16,12 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+GEMINI_API_KEYS = [
+    key.strip()
+    for key in os.getenv("GEMINI_API_KEYS", GEMINI_API_KEY).split(",")
+    if key.strip()
+]
+
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ============================

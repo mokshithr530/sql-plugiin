@@ -8,7 +8,8 @@ from config import (
     SUPPORTED_DATABASES,
     SUPPORTED_DATABASE_NOTES,
     LLM_PROVIDER,
-    GEMINI_MODEL
+    GEMINI_MODEL,
+    GEMINI_API_KEYS
 )
 import os
 import shutil
@@ -181,7 +182,8 @@ async def status():
         "supported_uploads": SUPPORTED_DATABASE_NOTES,
         "llm": {
             "provider": LLM_PROVIDER,
-            "model": GEMINI_MODEL
+            "model": GEMINI_MODEL,
+            "keys_configured": len(GEMINI_API_KEYS)
         }
     }
 
