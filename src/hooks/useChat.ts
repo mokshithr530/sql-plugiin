@@ -10,7 +10,7 @@ export function useChat() {
         {
             role: "assistant",
             content:
-                "👋 Welcome to AI Plugin.\nUpload a SQL database to begin."
+                "Upload a SQL database to begin."
         }
     ]);
 
@@ -36,7 +36,9 @@ export function useChat() {
                 ...prev,
                 {
                     role: "assistant",
-                    content: response.answer
+                    content: response.success
+                        ? response.answer
+                        : `${response.answer}\n\nYou can also try asking the same question with more specific table or column words.`
                 }
             ]);
         } catch (err) {

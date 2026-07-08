@@ -1,858 +1,523 @@
- # SQL AI Plugin
-## Enterprise Natural Language SQL Assistant
+# SQL Assistant POC - Project Context
 
 Author: Mokshith Reddy Nallaballe
 
 ---
 
-# Project Goal
+## Project Goal
 
-The objective of this project is to build an enterprise-grade AI plugin that allows users to upload SQL databases and ask questions in natural language.
+This project is a proof-of-concept natural language SQL assistant.
 
-Example:
+The user uploads a SQL database file, asks a question in plain English, and receives a safe SQL-backed answer. The user does not need to write SQL manually.
 
-User uploads:
+Example flow:
 
-employees.sqlite
-
-↓
-
-User asks:
-
-"Who are the top 10 highest paid employees?"
-
-↓
-
-The AI should:
-
-1. Read the database schema.
-2. Understand relationships.
-3. Generate SQL using Gemini.
-4. Validate the SQL.
-5. Execute the SQL safely.
-6. Explain the results in natural language.
-
-The user should never need to write SQL manually.
+1. User uploads `employees.sqlite`.
+2. User asks: `Who are the top 10 highest paid employees?`
+3. Backend reads the database schema.
+4. Backend asks the configured LLM to generate SQL.
+5. Backend validates the SQL.
+6. Backend executes the SQL safely.
+7. Backend returns a natural-language answer with the result.
 
 ---
 
-# Current Tech Stack
+## Current Status
 
-## Frontend
+The POC is working end to end.
+
+Completed:
+
+- Frontend POC workspace.
+- Floating chat widget.
+- Database upload from UI.
+- Database metadata chip.
+- Backend upload endpoint.
+- Backend chat endpoint.
+- SQLite database connection.
+- `.sql` dump import into temporary SQLite.
+- Schema reading.
+- SQL generation using the configured LLM provider.
+- SQL validation before execution.
+- Safe SQL execution.
+- Natural-language answer generation.
+- Deterministic ecommerce product/category analysis for common manager questions.
+- Deterministic revenue-at-risk analysis for loss/risk questions when cost data is unavailable.
+- In-memory session state.
+- Real Gemini end-to-end test.
+- Provider-ready LLM layer for future MCP or other providers.
+- Backend tests.
+- GitHub Actions test workflow.
+- Short README with setup, run steps, and troubleshooting.
+
+Still left:
+
+- Actual MCP provider implementation.
+- Support for non-Gemini providers such as OpenAI or Anthropic.
+- Browser end-to-end automated tests.
+- More tests for `.sql` import and retry behavior.
+- Generalize deterministic business-analysis templates beyond Olist-style ecommerce schemas.
+- Persistent sessions.
+- Better result display/export in the UI.
+- Authentication and deployment setup.
+
+---
+
+## Tech Stack
+
+Frontend:
 
 - React
 - TypeScript
 - Vite
 - Tailwind CSS
-- Lucide React Icons
+- Lucide React
 
-## Backend
+Backend:
 
 - FastAPI
 - SQLite
-- Gemini API
 - Pandas
 - python-dotenv
+- google-genai
+
+Testing:
+
+- pytest
+- FastAPI TestClient
+- npm build/lint
 
 ---
 
-# Project Architecture
+## Architecture
 
-Frontend
+The frontend never talks directly to the LLM.
 
-React
+Current request flow:
 
-↓
+```text
+React UI
+-> src/services/api.ts
+-> FastAPI backend
+-> chat_pipeline.py
+-> llm.py / provider layer
+-> configured LLM provider
+-> SQL validator
+-> SQL executor
+-> response back to UI
+```
 
-Hooks
+Important design decision:
 
-↓
+```text
+Frontend = UI only
+Backend = schema, SQL generation, validation, execution, LLM calls
+```
 
-Services
-
-↓
-
-FastAPI
-
-↓
-
-Database Layer
-
-↓
-
-Gemini
-
-The frontend should NEVER directly talk to Gemini.
-
-Only FastAPI communicates with Gemini.
+This keeps API keys and database logic out of the browser.
 
 ---
 
-# Folder Structure
+## Provider / LLM Design
 
-Frontend
+The project is no longer hardcoded directly around Gemini in the app flow.
 
-src/
+Current structure:
 
-components/
+- `chat_pipeline.py` calls `llm.generate_sql()`, `llm.rewrite_failed_sql()`, and `llm.generate_answer()`.
+- `llm.py` owns prompt construction and provider calls.
+- `GeminiProvider` is currently implemented.
+- `MCPProvider` exists as a placeholder for future MCP work.
+- `config.py` supports generic `LLM_*` environment variables.
 
-hooks/
+Current working provider:
 
-services/
+```text
+LLM_PROVIDER=gemini
+```
 
-types/
+Supported generic environment variables:
 
-assets/
+```env
+LLM_PROVIDER=gemini
+LLM_API_KEYS=paste_your_real_api_key_here
+LLM_MODEL=gemini-2.5-flash
+LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
+```
 
-App.tsx
+Backward-compatible Gemini-specific variables are still supported:
 
-main.tsx
+```env
+GEMINI_API_KEY=...
+GEMINI_API_KEYS=...
+GEMINI_MODEL=...
+GEMINI_FALLBACK_MODELS=...
+```
 
-Backend
+Important clarification:
 
-backend/
-
-main.py
-
-config.py
-
-database_manager.py
-
-sql_importer.py
-
-schema_reader.py
-
-validator.py
-
-sql_executor.py
-
-session_memory.py
-
-llm.py
-
-uploads/
-
-temp_databases/
+- Generic `LLM_*` naming is supported.
+- Only Gemini is implemented today.
+- Other providers will need their own provider class in `backend/llm.py`.
+- MCP can be added by implementing `MCPProvider`.
 
 ---
 
-# Frontend Progress
+## MCP Readiness
 
-## Components
+MCP should be added at the provider layer only.
 
-### ChatWidget
+Expected future MCP path:
 
-Purpose
+```text
+chat_pipeline.py
+-> LLMService
+-> MCPProvider
+-> MCP server/tool call
+```
 
-Owns the overall chat window.
+Files that should usually not need major changes for MCP:
 
-Responsibilities
+- `main.py`
+- `chat_pipeline.py`
+- frontend components
+- `sql_executor.py`
+- `validator.py`
 
-- Floating button
-- Open/close popup
-- Owns database state
-- Owns message state
-- Owns loading state
-- Passes props to children
+Files likely involved in MCP work:
 
-Current Status
+- `backend/llm.py`
+- `backend/config.py`
+- tests for MCP/provider behavior
 
-Needs refactoring to fully use hooks.
-
----
-
-### ChatHeader
-
-Completed.
-
-Displays
-
-- Plugin title
-- Subtitle
+Do not put MCP logic into React components. Keep provider-specific logic inside the backend provider layer.
 
 ---
 
-### ChatMessages
+## Important Files
 
-Completed.
+Frontend:
 
-Displays
+- `src/App.tsx` - POC workspace page.
+- `src/components/ChatWidget.tsx` - floating chat container and database state.
+- `src/components/ChatInput.tsx` - message input and upload control.
+- `src/components/UploadDatabase.tsx` - database upload UI.
+- `src/components/DatabaseChip.tsx` - connected database display.
+- `src/components/ChatMessages.tsx` - chat transcript.
+- `src/services/api.ts` - all frontend backend API calls.
+- `src/types/` - shared frontend TypeScript types.
 
-- User messages
-- Assistant messages
-- Loading animation
+Backend:
 
-Future Improvements
+- `backend/main.py` - FastAPI app and HTTP endpoints.
+- `backend/chat_pipeline.py` - upload-to-answer orchestration.
+- `backend/chat_pipeline.py` also contains POC business-analysis shortcuts for common ecommerce questions such as best product/category and revenue at risk.
+- `backend/llm.py` - LLM service and provider layer.
+- `backend/config.py` - environment/config values.
+- `backend/database_manager.py` - database connection management.
+- `backend/sql_importer.py` - `.sql` dump conversion.
+- `backend/schema_reader.py` - schema extraction.
+- `backend/validator.py` - SQL safety checks.
+- `backend/sql_executor.py` - safe SQL execution.
+- `backend/session_memory.py` - in-memory active session state.
 
-- Markdown
-- Code formatting
-- SQL syntax highlighting
+Tests:
 
----
-
-### ChatInput
-
-Currently under refactoring.
-
-Responsibilities
-
-- Send messages
-- Display attached database
-- Upload database
-- Enter key support
-
-Database state should NOT be stored here.
-
-It should receive
-
-database
-
-setDatabase
-
-from ChatWidget.
+- `tests/test_api.py`
+- `tests/test_sql_executor.py`
+- `tests/test_validator.py`
+- `tests/conftest.py`
 
 ---
 
-### UploadDatabase
+## API Endpoints
 
-Uploads database to backend.
+`POST /upload`
 
-Current Behaviour
+Uploads a database file, validates the extension, connects the database, reads schema, stores session state, and returns database metadata.
 
-Uploads successfully.
+`POST /chat`
 
-Needs Improvement
+Receives a natural-language question, generates SQL, validates it, executes it safely, generates an answer, and returns the answer, SQL, and result payload.
 
-Return full database object instead of filename only.
+`GET /status`
 
-Current callback
+Returns backend status, active database state, supported uploads, provider name, model name, and configured key count.
 
-onUploadSuccess(file.name)
+`POST /clear`
 
-Desired callback
-
-onUploadSuccess(result.database)
+Clears session memory and disconnects the active database.
 
 ---
 
-### DatabaseChip
+## Supported Uploads
 
-Purpose
+Currently supported:
 
-Shows current connected database.
+- `.db`
+- `.sqlite`
+- `.sql`
 
-Desired UI
+Notes:
 
-🗄 employees.sqlite
-
-SQLite Database
-
-8 Tables • 54 Columns
-
-Future
-
-Allow removing current database.
+- `.db` and `.sqlite` are opened directly as SQLite databases.
+- `.sql` dumps are converted into temporary SQLite databases.
+- Live MySQL, PostgreSQL, and SQL Server connections are not implemented yet.
 
 ---
 
-# Hooks
+## Security / SQL Safety
 
-useChat
+The backend validates LLM-generated SQL before execution.
 
-Purpose
+Current protections:
 
-Manage
+- Only `SELECT` and `WITH` queries are allowed.
+- Dangerous keywords are blocked.
+- Multiple SQL statements are blocked.
+- Referenced tables are checked against schema.
+- Referenced columns are checked against schema.
+- Row limit is added when generated SQL has no `LIMIT`.
+- Aggregate expressions such as `SUM(...)`, `AVG(...)`, and `COUNT(DISTINCT ...)` are allowed for analytical queries.
 
-- Messages
-- Loading
-- AI requests
+Blocked SQL keywords include:
 
-Should eventually call
+- `DROP`
+- `DELETE`
+- `UPDATE`
+- `INSERT`
+- `ALTER`
+- `CREATE`
+- `TRUNCATE`
+- `ATTACH`
+- `DETACH`
+- `REPLACE`
+- `PRAGMA`
 
-sendMessage()
+Future improvement:
 
-from services/api.ts
-
----
-
-useUpload
-
-Purpose
-
-Manage
-
-- Upload loading
-- Upload state
-- Connected database
-
-Should store
-
-DatabaseInfo
-
-instead of only filename.
+- Replace regex/string-based validation with a SQL parser such as `sqlglot`.
 
 ---
 
-# Services
+## Environment Files
 
-api.ts
+`backend/.env.example`
 
-Contains ALL backend communication.
+- Safe template.
+- Committed to the repo.
+- Does not contain real keys.
+- Shows what variables are needed.
 
-Functions
+`backend/.env`
 
-uploadDatabase()
+- Private local file.
+- Contains real API keys.
+- Must not be committed.
+- Ignored by `.gitignore`.
 
-sendMessage()
+Setup:
 
-clearSession()
+```powershell
+copy backend\.env.example backend\.env
+```
 
-getStatus()
+Then edit `backend/.env` and set:
 
-No component should use fetch() directly.
-
-Always use api.ts.
-
----
-
-# Types
-
-chat.ts
-
-Contains
-
-Message
-
-ChatResponse
-
-database.ts
-
-Contains
-
-DatabaseInfo
-
-UploadResponse
-
-Never duplicate interfaces.
-
-Always import them.
+```env
+LLM_PROVIDER=gemini
+LLM_API_KEYS=your_real_key_here
+LLM_MODEL=gemini-2.5-flash
+LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
+GEMINI_TIMEOUT_SECONDS=20
+QUERY_ROW_LIMIT=100
+```
 
 ---
 
-# Backend Progress
+## Problems Found And Fixed
 
-database_manager.py
+Missing API key in UI:
 
-Completed
+- Problem: UI showed that the Gemini/LLM key was not configured.
+- Cause: backend process was stale or config was not loading `backend/.env` reliably.
+- Fix: `config.py` now loads `backend/.env` by absolute path based on the backend directory.
 
-Responsibilities
+SSL certificate failure:
 
-- Connect SQLite
-- Convert SQL dumps
-- Store connection
-- Return active connection
+- Problem: live Gemini calls failed with `CERTIFICATE_VERIFY_FAILED`.
+- Cause: Windows trusted the connection, but Python did not trust the local certificate chain. Avast SSL scanning was present.
+- Fix: added `python-certifi-win32` and `truststore`, and configured the backend to use trusted certificates before creating the LLM client.
 
-Supports
+Deprecated Google SDK:
 
-.db
+- Problem: old `google.generativeai` package showed a deprecation warning.
+- Fix: migrated to the current `google-genai` package and `google.genai` client.
 
-.sqlite
+Gemini model high demand:
 
-.sql
+- Problem: provider returned `503 UNAVAILABLE` when the selected model was busy.
+- Fix: fallback model config was added through `LLM_FALLBACK_MODELS` / `GEMINI_FALLBACK_MODELS`.
 
-Future
+Product analysis query failed:
 
-MySQL
+- Problem: questions like `which product was sold the most?` could fail because the LLM had to infer several ecommerce joins and the validator rejected some aggregate expressions.
+- Cause: the Olist schema needs joins across `order_items`, `products`, and `product_category_name_translation`; the validator also mishandled aggregate SQL in some cases.
+- Fix: added a deterministic ecommerce product/category SQL path in `chat_pipeline.py`, improved aggregate validation, and fixed duplicate `LIMIT` handling in `sql_executor.py`.
 
-PostgreSQL
+Loss / risk management question needed better handling:
 
-SQL Server
+- Problem: questions like `what is the loss and how should I manage it?` are business-analysis questions, not simple lookup questions.
+- Cause: the Olist database does not contain true cost, margin, or refund-cost fields, so true profit/loss cannot be calculated directly.
+- Fix: added a deterministic revenue-at-risk SQL path using canceled/unavailable orders from `orders` joined with `order_items`. The answer explains that this is a proxy, not true loss, and suggests management actions.
 
----
+Confusing `.env` setup:
 
-sql_importer.py
+- Problem: unclear whether real keys should go in `.env` or `.env.example`.
+- Fix: `.env.example` and README now clearly say real keys go only in `backend/.env`.
 
-Completed
+Outdated project context:
 
-Purpose
+- Problem: old context said `/chat` was not implemented and included GitHub setup instructions.
+- Fix: this file now reflects the current implementation and removes the GitHub section.
 
-Convert SQL dumps into temporary SQLite databases.
+UI looked too decorative:
 
-Stores converted files inside
-
-temp_databases/
-
----
-
-schema_reader.py
-
-Completed
-
-Features
-
-Read Tables
-
-Read Columns
-
-Read Foreign Keys
-
-Generate Schema Prompt
-
-Count Tables
-
-Count Columns
-
-Check Table Exists
-
-Get Column Names
-
-IMPORTANT
-
-This file should return NORMAL Python objects.
-
-It should NOT return HTTP responses.
+- Problem: first UI version felt like a generic landing page.
+- Fix: UI was simplified into a crisp POC workspace with a cleaner chat widget.
 
 ---
 
-validator.py
+## Testing Done
 
-Completed
+Commands run successfully:
 
-Checks
+```powershell
+python -m pytest -q
+npm run build
+npm run lint
+python -m compileall backend
+```
 
-Dangerous SQL
+Current pytest coverage:
 
-DROP
+- validator blocks unsafe SQL.
+- validator accepts valid SELECT queries.
+- validator rejects unknown tables/columns.
+- SQL executor returns dataframe payloads.
+- SQL executor applies default row limits.
+- SQL executor returns failure for bad SQL.
+- API upload works with a temporary SQLite DB.
+- API chat works with mocked LLM behavior.
+- Chat rejects questions when no database is uploaded.
 
-DELETE
+Real provider test:
 
-ALTER
+- A real temporary SQLite database was uploaded.
+- Real Gemini call generated SQL.
+- SQL was validated and executed.
+- Natural-language answer was returned successfully.
 
-UPDATE
+Business analysis tests run manually against `olist.sqlite`:
 
-INSERT
-
-CREATE
-
-Only SELECT and WITH allowed.
-
-Future
-
-Use sqlglot parser instead of string matching.
-
----
-
-sql_executor.py
-
-Completed
-
-Purpose
-
-Safely execute SQL.
-
-Returns
-
-Pandas DataFrame
-
-Future
-
-Execution timing
-
-Row limits
-
-Streaming
+- `which product was sold the most?` returns `bed_bath_table` as the top category by units sold and includes revenue context.
+- `what product should I focus on more?` recommends `health_beauty` based on revenue and volume.
+- `what is the loss how should i manage it?` reports canceled/unavailable orders as revenue-at-risk and explains how to manage the issue.
 
 ---
 
-session_memory.py
+## How To Run
 
-Completed
+Install dependencies:
 
-Stores
+```powershell
+npm install
+pip install -r requirements.txt
+```
 
-Current Database
+Create `.env`:
 
-Current Schema
+```powershell
+copy backend\.env.example backend\.env
+```
 
-Chat History
+Start backend:
 
-Last SQL
+```powershell
+cd backend
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
-Last Result
+Start frontend from project root:
 
-Retry Count
+```powershell
+npm run dev
+```
 
-Future
+Open:
 
-Conversation summarization
+```text
+http://localhost:5173
+```
 
-Persistent sessions
+Backend status:
 
----
-
-llm.py
-
-Completed
-
-Functions
-
-_generate()
-
-generate_sql()
-
-generate_answer()
-
-rewrite_failed_sql()
-
-summarize_schema()
-
-suggest_followup()
-
-Future
-
-Few-shot prompting
-
-Prompt templates
-
-Model switching
+```text
+http://127.0.0.1:8000/status
+```
 
 ---
 
-config.py
+## Known Limitations
 
-Completed
-
-Contains
-
-Gemini Model
-
-API Key
-
-Upload Folder
-
-Temp Folder
-
-Blocked Keywords
-
-Retry Count
-
-Supported Extensions
-
-Should contain ALL configuration values.
-
-Never hardcode values elsewhere.
+- Sessions are stored in memory only.
+- Uploaded database must be re-uploaded after backend restart.
+- Only one active database/session is supported.
+- Only Gemini provider is implemented today.
+- MCP provider is a placeholder, not functional yet.
+- SQL validation is conservative and regex-based.
+- POC business-analysis shortcuts currently target Olist-style ecommerce schemas.
+- True profit/loss requires cost, margin, refund, or expense data. If those fields are missing, the app reports revenue at risk instead.
+- UI does not yet show rich result tables or charts.
+- No authentication.
+- No production deployment configuration.
 
 ---
 
-main.py
+## Recommended Next Work
 
-Part 1
+High priority:
 
-Completed
+- Implement actual `MCPProvider` when MCP server/tool contract is known.
+- Add tests for provider fallback behavior.
+- Add tests for `.sql` dump import.
+- Add automated tests for product/category and revenue-at-risk analysis paths.
+- Add browser-level workflow test.
+- Rotate any real API keys if they were ever exposed outside `backend/.env`.
 
-FastAPI
+Medium priority:
 
-Imports
+- Add result table display in the chat UI.
+- Add SQL preview/copy option if needed for demos.
+- Add persistent session storage.
+- Improve logging around provider calls and retry decisions.
 
-CORS
+Later:
 
-Folders
-
----
-
-Part 2
-
-Completed
-
-POST /upload
-
-Flow
-
-Validate File
-
-↓
-
-Save File
-
-↓
-
-Connect Database
-
-↓
-
-Read Schema
-
-↓
-
-Store Session
-
-↓
-
-Return Database Metadata
-
-Current Status
-
-Working
+- Add OpenAI/Anthropic providers if required.
+- Add live database connections for PostgreSQL/MySQL.
+- Add authentication.
+- Add Docker/deployment setup.
 
 ---
 
-Still Remaining
-
-Part 3
-
-POST /chat
-
-Flow
-
-Receive Question
-
-↓
-
-Get Current Schema
-
-↓
-
-Generate SQL
-
-↓
-
-Validate SQL
-
-↓
-
-Retry if invalid
-
-↓
-
-Execute SQL
-
-↓
-
-Generate Natural Language Answer
-
-↓
-
-Update Session Memory
-
-↓
-
-Return Response
-
----
-
-Part 4
-
-Retry Pipeline
-
-Question
-
-↓
-
-LLM
-
-↓
-
-Validator
-
-↓
-
-Invalid?
-
-↓
-
-Rewrite SQL
-
-↓
-
-Validator
-
-↓
-
-Execute
-
-↓
-
-Answer
-
----
-
-Current API
-
-POST
-
-/upload
-
-Completed
-
-POST
-
-/chat
-
-Not implemented
-
-GET
-
-/status
-
-Future
-
-POST
-
-/clear
-
-Future
-
----
-
-Current Frontend Status
-
-Floating Chat
-
-Completed
-
-Popup
-
-Completed
-
-Header
-
-Completed
-
-Messages
-
-Completed
-
-Upload
-
-Completed
-
-Database Upload
-
-Working
-
-Database Chip
-
-Needs integration
-
-ChatInput
-
-Needs state refactor
-
-Suggested Questions
-
-Removed intentionally
-
-SQL Viewer
-
-Removed intentionally
-
-Copy SQL Button
-
-Removed intentionally
-
----
-
-Important Design Decisions
-
-Database state belongs in ChatWidget.
-
-ChatInput should receive database as props.
-
-Components should ONLY render UI.
-
-Hooks manage state.
-
-Services perform API requests.
-
-Backend services should return Python objects.
-
-Only main.py should return HTTP JSON responses.
-
----
-
-Future Features
-
-Charts
-
-Graphs
-
-CSV Export
-
-Excel Export
-
-Authentication
-
-Multiple Sessions
-
-Multiple Databases
-
-Conversation Memory
-
-SQL Explanation
-
-Streaming Responses
-
-Deploy Backend
-
-Deploy Frontend
-
-Docker
-
----
-
-Current Progress
-
-Frontend
-
-~75%
-
-Backend
-
-~90%
-
-Overall
-
-~82%
-
----
-
-Coding Guidelines
-
-- Keep components small.
-- Do not duplicate interfaces.
-- Use hooks for state.
-- Use api.ts for all API calls.
-- Keep business logic in backend.
-- Never call Gemini from frontend.
-- Never execute raw SQL without validation.
-- Configuration must remain inside config.py.
-
----
-
-Immediate Next Tasks
-
-1. Finish ChatWidget refactor.
-2. Finish DatabaseChip integration.
-3. Finish UploadDatabase callback.
-4. Implement POST /chat.
-5. Connect Gemini.
-6. Validate SQL.
-7. Execute SQL.
-8. Generate AI response.
-9. Test complete upload → chat pipeline.
-10. Polish UI.
-
----
-
-Notes for Future AI/Codex Sessions
-
-Before making architectural changes:
-
-- Read this entire file.
-- Preserve the current component hierarchy.
-- Do not move business logic into React components.
-- Do not duplicate API logic.
-- Prefer reusable hooks and services.
-- If refactoring is required, explain why before changing architecture.
-- Keep the code modular and maintainable.
-- Avoid introducing breaking changes without updating all dependent files.
+## Rules For Future Changes
+
+- Do not call the LLM directly from the frontend.
+- Do not put provider-specific logic in React components.
+- Keep all backend API calls inside `src/services/api.ts`.
+- Keep SQL validation before SQL execution.
+- Do not execute write queries from LLM output.
+- Keep real secrets out of Git.
+- Add new LLM providers inside `backend/llm.py` or a dedicated provider module.
+- Prefer config values in `backend/config.py` instead of hardcoding.

@@ -24,12 +24,11 @@ export default function DatabaseChip({
         flex
         items-center
         justify-between
-        rounded-2xl
+        rounded-lg
         border
-        border-cyan-200
-        bg-cyan-50
+        border-gray-200
+        bg-gray-50
         p-3
-        shadow-sm
       "
     >
       <div className="flex items-center gap-3">
@@ -40,8 +39,8 @@ export default function DatabaseChip({
             w-10
             items-center
             justify-center
-            rounded-xl
-            bg-cyan-500
+            rounded-lg
+            bg-gray-950
             text-white
           "
         >
@@ -77,7 +76,7 @@ export default function DatabaseChip({
             rounded-full
             p-1
             hover:bg-gray-200
-            transition
+            transition-colors
           "
         >
           <X size={16} />

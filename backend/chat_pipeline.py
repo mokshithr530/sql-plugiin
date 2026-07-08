@@ -26,6 +26,131 @@ class ChatPipeline:
             "records": dataframe.to_dict(orient="records"),
         }
 
+    def _fallback_answer(self, question, dataframe):
+        if dataframe.empty:
+            return (
+                "I did not find matching records for that question. "
+                "Try asking with a specific table, product category, or date range."
+            )
+
+        columns = set(dataframe.columns)
+        question_lower = question.lower()
+
+        if {"product_category", "units_sold", "revenue"}.issubset(columns):
+            top = dataframe.iloc[0]
+            category = top["product_category"] or "uncategorized products"
+            units = int(top["units_sold"])
+            revenue = float(top["revenue"])
+
+            if "focus" in question_lower or "should" in question_lower:
+                return (
+                    f"I would focus first on {category}. It leads this view with "
+                    f"{units:,} units sold and about {revenue:,.2f} in revenue, "
+                    "so it has both demand and business impact. Compare it with the next few categories before making a final decision, especially if margin data is available."
+                )
+
+            return (
+                f"The most sold product category is {category}, with {units:,} units sold. "
+                f"It generated about {revenue:,.2f} in revenue, so it is also commercially important, not just high-volume."
+            )
+
+        if {"order_status", "affected_orders", "revenue_at_risk"}.issubset(columns):
+            top = dataframe.iloc[0]
+            status = top["order_status"]
+            orders = int(top["affected_orders"])
+            revenue_at_risk = float(top["revenue_at_risk"] or 0)
+
+            return (
+                "I cannot calculate true profit or loss from this database because it does not include product cost, margin, or refund-cost fields. "
+                f"As a practical proxy, the biggest visible risk is {status} orders: {orders:,} orders tied to about {revenue_at_risk:,.2f} in item value. "
+                "To manage this, start by reducing cancellations/unavailable orders, checking seller fulfillment issues, and tracking margin or refund data in the next version."
+            )
+
+        first_row = dataframe.iloc[0].to_dict()
+        readable_values = ", ".join(
+            f"{key}: {value}"
+            for key, value in first_row.items()
+        )
+
+        return f"The top result is {readable_values}."
+
+    def _ecommerce_product_sql(self, question):
+        question_lower = question.lower()
+        schema = session_memory.get_schema() or {}
+        tables = set(schema.keys())
+
+        required_tables = {
+            "order_items",
+            "products",
+            "product_category_name_translation",
+        }
+
+        if not required_tables.issubset(tables):
+            return None
+
+        product_words = ["product", "item", "category"]
+        sold_words = ["sold", "selling", "most", "top", "best"]
+        focus_words = ["focus", "recommend", "should", "priority", "improve"]
+
+        asks_product = any(word in question_lower for word in product_words)
+        asks_sales_rank = any(word in question_lower for word in sold_words)
+        asks_focus = any(word in question_lower for word in focus_words)
+
+        if not asks_product or not (asks_sales_rank or asks_focus):
+            return None
+
+        order_by = "revenue DESC" if asks_focus else "units_sold DESC"
+
+        return f"""
+SELECT
+    t.product_category_name_english AS product_category,
+    COUNT(*) AS units_sold,
+    SUM(oi.price) AS revenue,
+    AVG(oi.price) AS average_price
+FROM order_items oi
+JOIN products p
+    ON oi.product_id = p.product_id
+LEFT JOIN product_category_name_translation t
+    ON p.product_category_name = t.product_category_name
+GROUP BY t.product_category_name_english
+ORDER BY {order_by}
+LIMIT 10
+""".strip()
+
+    def _ecommerce_loss_sql(self, question):
+        question_lower = question.lower()
+        schema = session_memory.get_schema() or {}
+        tables = set(schema.keys())
+
+        required_tables = {
+            "orders",
+            "order_items",
+        }
+
+        if not required_tables.issubset(tables):
+            return None
+
+        loss_words = ["loss", "lost", "risk", "problem", "manage", "reduce"]
+        asks_loss = any(word in question_lower for word in loss_words)
+
+        if not asks_loss:
+            return None
+
+        return """
+SELECT
+    o.order_status,
+    COUNT(DISTINCT o.order_id) AS affected_orders,
+    SUM(oi.price + oi.freight_value) AS revenue_at_risk,
+    AVG(oi.price + oi.freight_value) AS average_order_item_value
+FROM orders o
+JOIN order_items oi
+    ON o.order_id = oi.order_id
+WHERE o.order_status IN ('canceled', 'unavailable')
+GROUP BY o.order_status
+ORDER BY revenue_at_risk DESC
+LIMIT 10
+""".strip()
+
     def ask(self, question):
         self._ensure_database()
         question = self._validate_question(question)
@@ -33,7 +158,14 @@ class ChatPipeline:
         reader = SchemaReader()
         schema_prompt = reader.get_schema_prompt()
 
-        sql = llm.generate_sql(question, schema_prompt)
+        sql = (
+            self._ecommerce_product_sql(question)
+            or self._ecommerce_loss_sql(question)
+        )
+
+        if not sql:
+            sql = llm.generate_sql(question, schema_prompt)
+
         validation = validator.validate(sql)
 
         retries = 0
@@ -54,7 +186,11 @@ class ChatPipeline:
             session_memory.set_last_error(validation["error"])
             return {
                 "success": False,
-                "answer": "I could not safely generate SQL for that question.",
+                "answer": (
+                    "I could not turn that into a safe query yet. "
+                    "Try asking it with the table or field name, for example: "
+                    "'Which product had the highest total sales?'"
+                ),
                 "sql": sql,
                 "result": None,
                 "error": validation["error"],
@@ -88,14 +224,22 @@ class ChatPipeline:
             session_memory.set_last_error(execution["error"])
             return {
                 "success": False,
-                "answer": "I generated SQL, but it could not be executed safely.",
+                "answer": (
+                    "I found a query idea, but it did not run against this database. "
+                    "Try rephrasing with a bit more detail, such as the metric you want "
+                    "to rank by: quantity sold, revenue, or order count."
+                ),
                 "sql": sql,
                 "result": None,
                 "error": execution["error"],
             }
 
         dataframe = execution["data"]["dataframe"]
-        answer = llm.generate_answer(question, dataframe)
+        try:
+            answer = llm.generate_answer(question, dataframe)
+        except RuntimeError:
+            answer = self._fallback_answer(question, dataframe)
+
         result = self._dataframe_payload(dataframe)
 
         session_memory.add_message("user", question)

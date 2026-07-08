@@ -23,10 +23,10 @@ export default function ChatMessages({
       className="
         flex-1
         overflow-y-auto
-        bg-gray-50
+        bg-gray-100
         px-4
-        py-5
-        space-y-4
+        py-4
+        space-y-3
       "
     >
       {messages.map((message, index) => (
@@ -39,10 +39,10 @@ export default function ChatMessages({
           }`}
         >
           <div
-            className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-md whitespace-pre-wrap text-sm leading-6 ${
+            className={`max-w-[88%] rounded-lg border px-3.5 py-2.5 whitespace-pre-wrap text-sm leading-6 ${
               message.role === "user"
-                ? "bg-cyan-500 text-white"
-                : "bg-white text-gray-800"
+                ? "border-gray-950 bg-gray-950 text-white"
+                : "border-gray-200 bg-white text-gray-800"
             }`}
           >
             {message.content}
@@ -55,13 +55,15 @@ export default function ChatMessages({
           <div
             className="
               bg-white
-              rounded-2xl
-              px-4
-              py-3
-              shadow-md
+              rounded-lg
+              border
+              border-gray-200
+              px-3
+              py-2
               flex
               items-center
               gap-2
+              text-gray-500
             "
           >
             <span className="animate-bounce">●</span>

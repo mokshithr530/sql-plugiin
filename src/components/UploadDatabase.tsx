@@ -60,15 +60,18 @@ export default function UploadDatabase({
           className="
             h-11
             w-11
-            rounded-full
-            bg-gray-100
-            hover:bg-cyan-100
+            rounded-lg
+            border
+            border-gray-300
+            bg-white
+            hover:bg-gray-100
             disabled:cursor-not-allowed
             disabled:opacity-60
-            transition
+            transition-colors
             flex
             items-center
             justify-center
+            text-gray-700
           "
         >
           <Database size={20} />
@@ -112,7 +115,7 @@ export default function UploadDatabase({
           className="
             fixed
             inset-0
-            bg-black/40
+            bg-black/30
             flex
             items-center
             justify-center
@@ -122,8 +125,8 @@ export default function UploadDatabase({
           <div
             className="
               bg-white
-              rounded-2xl
-              p-8
+              rounded-lg
+              p-6
               shadow-xl
               text-center
             "
@@ -133,15 +136,15 @@ export default function UploadDatabase({
                 h-10
                 w-10
                 rounded-full
-                border-4
-                border-cyan-500
+                border-[3px]
+                border-gray-950
                 border-t-transparent
                 animate-spin
                 mx-auto
               "
             />
 
-            <p className="mt-5">
+            <p className="mt-4 text-sm text-gray-700">
               Uploading database...
             </p>
           </div>

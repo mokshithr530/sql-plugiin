@@ -1,7 +1,35 @@
-import google.generativeai as genai
+import os
+from abc import ABC, abstractmethod
 
+try:
+    import certifi_win32  # noqa: F401
+except ImportError:
+    certifi_win32 = None
+
+try:
+    import certifi
+    os.environ.setdefault("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", certifi.where())
+except ImportError:
+    certifi = None
+
+try:
+    import truststore
+except ImportError:
+    truststore = None
+
+if truststore:
+    truststore.inject_into_ssl()
+
+from google import genai
+
+from config import (
+    GEMINI_API_KEYS,
+    GEMINI_FALLBACK_MODELS,
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT_SECONDS,
+    LLM_PROVIDER,
+)
 from session_memory import session_memory
-from config import GEMINI_API_KEYS, GEMINI_MODEL, LLM_PROVIDER
 
 
 def _clean_sql(sql):
@@ -10,27 +38,43 @@ def _clean_sql(sql):
     return cleaned.strip()
 
 
-class LLMService:
+def _clean_answer(answer):
+    cleaned = answer.replace("**", "")
+    cleaned = cleaned.replace("`", "")
+    return cleaned.strip()
 
-    def __init__(self):
 
-        self.provider = LLM_PROVIDER
-        self.model_name = GEMINI_MODEL
-        self.api_keys = GEMINI_API_KEYS
+class BaseLLMProvider(ABC):
+    def __init__(self, provider_name, model_name):
+        self.provider_name = provider_name
+        self.model_name = model_name
+
+    @abstractmethod
+    def generate(self, prompt):
+        raise NotImplementedError
+
+
+class GeminiProvider(BaseLLMProvider):
+    def __init__(self, model_name, fallback_models, api_keys, timeout_seconds):
+        super().__init__("gemini", model_name)
+        self.model_names = list(dict.fromkeys([model_name, *fallback_models]))
+        self.api_keys = api_keys
+        self.timeout_seconds = timeout_seconds
         self.active_key_index = 0
-        self.model = None
+        self.client = None
 
-        if self.provider == "gemini" and self.api_keys:
-            self._configure_gemini(0)
+        if self.api_keys:
+            self._configure_key(0)
 
-    def _configure_gemini(self, key_index):
+    def _configure_key(self, key_index):
         self.active_key_index = key_index
-        genai.configure(api_key=self.api_keys[key_index])
-        self.model = genai.GenerativeModel(self.model_name)
+        self.client = genai.Client(
+            api_key=self.api_keys[key_index],
+            http_options={"timeout": self.timeout_seconds * 1000},
+        )
 
     def _should_try_next_key(self, error):
         message = str(error).lower()
-
         retry_markers = [
             "quota",
             "rate",
@@ -40,58 +84,104 @@ class LLMService:
             "api key",
             "authentication",
         ]
-
         return any(marker in message for marker in retry_markers)
 
-    # ----------------------------------
-    # Private Model Call
-    # ----------------------------------
+    def _should_try_next_model(self, error):
+        message = str(error).lower()
+        retry_markers = [
+            "503",
+            "504",
+            "unavailable",
+            "deadline_exceeded",
+            "deadline exceeded",
+            "high demand",
+            "overloaded",
+            "temporarily",
+            "timed out",
+            "timeout",
+        ]
+        return any(marker in message for marker in retry_markers)
 
-    def _generate(self, prompt):
-
-        if self.provider != "gemini":
+    def generate(self, prompt):
+        if not self.api_keys or self.client is None:
             raise RuntimeError(
-                f"Unsupported LLM provider: {self.provider}"
-            )
-
-        if not self.api_keys or self.model is None:
-            raise RuntimeError(
-                "Gemini API key is not configured. Set GEMINI_API_KEY or GEMINI_API_KEYS in backend/.env."
+                "LLM API key is not configured. Set LLM_API_KEY, LLM_API_KEYS, GEMINI_API_KEY, or GEMINI_API_KEYS in backend/.env."
             )
 
         last_error = None
 
         for offset in range(len(self.api_keys)):
             key_index = (self.active_key_index + offset) % len(self.api_keys)
-            self._configure_gemini(key_index)
+            self._configure_key(key_index)
 
-            try:
-                response = self.model.generate_content(prompt)
-                return response.text.strip()
-            except Exception as error:
-                last_error = error
+            for model_name in self.model_names:
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    return response.text.strip()
+                except Exception as error:
+                    last_error = error
 
-                if not self._should_try_next_key(error):
-                    break
+                    if self._should_try_next_model(error):
+                        continue
+
+                    if not self._should_try_next_key(error):
+                        break
+
+            if last_error and not self._should_try_next_key(last_error):
+                break
 
         raise RuntimeError(
-            f"Gemini request failed after trying {len(self.api_keys)} configured key(s): {last_error}"
+            "LLM request failed after trying "
+            f"{len(self.api_keys)} configured key(s) and "
+            f"{len(self.model_names)} model(s): {last_error}"
         )
-    
-    
-    def generate_sql(self,question,schema_prompt):
 
+
+class MCPProvider(BaseLLMProvider):
+    def __init__(self):
+        super().__init__("mcp", "unconfigured")
+
+    def generate(self, prompt):
+        raise RuntimeError(
+            "MCP provider is not implemented yet. Add an MCP-backed provider in backend/llm.py."
+        )
+
+
+def create_provider():
+    if LLM_PROVIDER == "gemini":
+        return GeminiProvider(
+            model_name=GEMINI_MODEL,
+            fallback_models=GEMINI_FALLBACK_MODELS,
+            api_keys=GEMINI_API_KEYS,
+            timeout_seconds=GEMINI_TIMEOUT_SECONDS,
+        )
+
+    if LLM_PROVIDER == "mcp":
+        return MCPProvider()
+
+    raise RuntimeError(f"Unsupported LLM provider: {LLM_PROVIDER}")
+
+
+class LLMService:
+    def __init__(self, provider):
+        self.provider = provider
+
+    def _generate(self, prompt):
+        return self.provider.generate(prompt)
+
+    def _conversation_history(self):
         history = session_memory.get_chat_history()
-
         conversation = ""
 
         for message in history:
+            conversation += f"{message['role']}: {message['content']}\n"
 
-            conversation += (
-                f"{message['role']}: "
-                f"{message['content']}\n"
-            )
+        return conversation
 
+    def generate_sql(self, question, schema_prompt):
         prompt = f"""
 You are a senior data analyst and SQL engineer.
 
@@ -102,7 +192,7 @@ Database schema:
 {schema_prompt}
 
 Recent conversation:
-{conversation}
+{self._conversation_history()}
 
 Current question:
 {question}
@@ -116,15 +206,34 @@ Rules:
 6. Add a reasonable LIMIT when the question asks for lists, rankings, examples, or broad results.
 7. Use SQLite-compatible syntax only.
 8. If the question is ambiguous, choose the most likely interpretation using the schema and conversation.
+9. Infer joins from shared ID columns when foreign keys are not declared, such as order_id, product_id, customer_id, and seller_id.
+10. For "sold most", "top product", or "best product" questions, rank by item count unless the user explicitly asks for revenue.
+11. For "what should I focus on" or business recommendation questions, return useful comparison metrics, usually units/count, revenue, average price, and order count when those columns exist.
+
+Common ecommerce patterns:
+- Product/category sold most by units:
+  SELECT t.product_category_name_english AS product_category, COUNT(*) AS units_sold, SUM(oi.price) AS revenue
+  FROM order_items oi
+  JOIN products p ON oi.product_id = p.product_id
+  LEFT JOIN product_category_name_translation t ON p.product_category_name = t.product_category_name
+  GROUP BY t.product_category_name_english
+  ORDER BY units_sold DESC
+  LIMIT 10
+- Product/category to focus on:
+  SELECT t.product_category_name_english AS product_category, COUNT(*) AS units_sold, SUM(oi.price) AS revenue, AVG(oi.price) AS average_price
+  FROM order_items oi
+  JOIN products p ON oi.product_id = p.product_id
+  LEFT JOIN product_category_name_translation t ON p.product_category_name = t.product_category_name
+  GROUP BY t.product_category_name_english
+  ORDER BY revenue DESC
+  LIMIT 10
 """
 
         return _clean_sql(self._generate(prompt))
-    
 
-    def generate_answer(self,question,dataframe):
-
+    def generate_answer(self, question, dataframe):
         prompt = f"""
-You are a concise business data assistant.
+You are a helpful data analyst speaking to a business user.
 
 User question:
 {question}
@@ -132,19 +241,25 @@ User question:
 SQL result:
 {dataframe.to_string(index=False)}
 
-Answer requirements:
-1. Answer directly in natural language.
-2. Mention the important numbers or records from the result.
-3. Do not invent facts outside the result.
-4. If the result is empty, clearly say that no matching records were found.
-5. Keep the answer short and useful.
+Write the final answer in a natural, human style.
+
+Rules:
+1. Answer the question directly in the first sentence.
+2. Use the actual values from the SQL result.
+3. If there are multiple rows, summarize the top findings in plain English.
+4. For recommendation questions like "what should I focus on", explain why the top option is attractive and mention one tradeoff if the data supports it.
+5. If columns include revenue and units/count, compare both instead of only naming the first row.
+6. If columns include revenue_at_risk, explain that this is a proxy for possible loss, not true profit/loss, unless actual cost or margin columns are present.
+7. If the result is empty, say that no matching records were found and suggest what the user can try next.
+8. Do not mention "SQL result", "dataframe", "snippet", or internal execution details.
+9. Do not sound robotic. Be clear, warm, and concise.
+10. Do not invent anything outside the result.
+11. Use 2-4 short sentences for analysis questions; use a short bullet list only when comparing several rows.
 """
 
-        return self._generate(prompt)
-    
-    
-    def rewrite_failed_sql(self,question,schema_prompt,failed_sql,error_message):
+        return _clean_answer(self._generate(prompt))
 
+    def rewrite_failed_sql(self, question, schema_prompt, failed_sql, error_message):
         prompt = f"""
 You are repairing a failed SQLite query.
 
@@ -160,24 +275,23 @@ Failed SQL:
 Validation or database error:
 {error_message}
 
+Use only tables and columns from the schema above. If the user asks about products, orders, customers, or sales, infer the likely joins from foreign keys and column names.
+
 Return only one corrected SQLite SELECT or WITH query.
 Do not explain, do not use markdown, and do not include unsafe SQL.
 """
 
         return _clean_sql(self._generate(prompt))
-    
 
-    def summarize_schema(self,schema_prompt):
+    def summarize_schema(self, schema_prompt):
         prompt = f"""
                 Summarize this database.
                 {schema_prompt}
                 Keep it under 80 words."""
 
         return self._generate(prompt)
-    
 
-    def suggest_followup(self, question,answer):
-
+    def suggest_followup(self, question, answer):
         prompt = f"""
                 User Question
                 {question}
@@ -187,6 +301,6 @@ Do not explain, do not use markdown, and do not include unsafe SQL.
                 """
 
         return self._generate(prompt)
-    
-    
-llm = LLMService()
+
+
+llm = LLMService(create_provider())

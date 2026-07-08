@@ -1,192 +1,282 @@
-# SQL AI Plugin
+# SQL Assistant POC
 
-An enterprise-style natural language SQL assistant built with React, FastAPI, SQLite, and Gemini.
+A small proof-of-concept app for asking questions about an uploaded SQL database in natural language.
 
-The goal of this project is simple: upload a database, ask a question in plain English, and get a safe SQL-backed answer without writing SQL manually.
+You upload a `.db`, `.sqlite`, or `.sql` file. The backend reads the schema, asks the configured LLM to generate SQL, validates the SQL, runs it safely, and returns a short answer.
 
-## Features
+## Stack
 
-- Floating React chat widget
-- Database upload for `.db`, `.sqlite`, and `.sql` files
-- MySQL-style `.sql` dump cleanup before SQLite import
-- Database metadata chip with table and column counts
-- FastAPI backend with clean upload, chat, status, and clear endpoints
-- Schema reading for tables, columns, and foreign keys
-- Gemini-powered SQL generation
-- SQL validation before execution
-- Retry pipeline for invalid or failed SQL
-- Safe query execution with automatic row limits
-- Natural-language answer generation from query results
-- Multi-key Gemini fallback using `GEMINI_API_KEYS`
-- Config-based LLM provider/model setup for future MCP or model switching
+- Frontend: React, TypeScript, Vite, Tailwind CSS
+- Backend: FastAPI, SQLite, Pandas
+- LLM: configured through `backend/.env`
 
-## Tech Stack
+## Architecture
 
-Frontend:
-
-- React
-- TypeScript
-- Vite
-- Tailwind CSS
-- Lucide React
-
-Backend:
-
-- FastAPI
-- SQLite
-- Pandas
-- Gemini API
-- python-dotenv
-
-## Project Structure
+High-level structure:
 
 ```text
-src/
-  components/
-  hooks/
-  services/
-  types/
-
-backend/
-  main.py
-  config.py
-  database_manager.py
-  sql_importer.py
-  schema_reader.py
-  validator.py
-  sql_executor.py
-  session_memory.py
-  llm.py
-  chat_pipeline.py
+Browser
+  |
+  v
+React UI
+  |
+  v
+src/services/api.ts
+  |
+  v
+FastAPI backend
+  |
+  +--> Upload / schema / session
+  |
+  +--> Chat pipeline
+          |
+          +--> LLM provider layer
+          |
+          +--> SQL validator
+          |
+          +--> SQL executor
+          |
+          v
+        Answer returned to UI
 ```
 
-## Setup
+Upload flow:
 
-Install frontend dependencies:
+```text
+User uploads database
+  |
+  v
+POST /upload
+  |
+  v
+Validate file type
+  |
+  v
+Save file in backend/uploads
+  |
+  v
+Connect SQLite database
+  |
+  v
+Read tables, columns, foreign keys
+  |
+  v
+Store active database in session memory
+```
 
-```bash
+Chat flow:
+
+```text
+User asks question
+  |
+  v
+POST /chat
+  |
+  v
+Read active schema
+  |
+  v
+LLM generates SQL
+  |
+  v
+Validate SQL safety
+  |
+  v
+Execute SQL
+  |
+  v
+LLM explains result
+  |
+  v
+Return answer + SQL + rows
+```
+
+LLM/provider design:
+
+```text
+chat_pipeline.py
+  |
+  v
+LLMService
+  |
+  v
+Provider
+  |
+  +--> GeminiProvider       currently implemented
+  |
+  +--> MCPProvider          placeholder for future MCP
+  |
+  +--> Other providers      can be added later
+```
+
+The frontend never calls the LLM directly. All provider calls happen inside the FastAPI backend.
+
+## First-Time Setup
+
+Run these commands from the project root:
+
+```powershell
 npm install
+pip install -r requirements.txt
 ```
 
-Install backend dependencies:
+Create your private environment file:
 
-```bash
-pip install fastapi uvicorn pandas python-dotenv google-generativeai python-multipart
-```
-
-Create a backend environment file:
-
-```bash
+```powershell
 copy backend\.env.example backend\.env
 ```
 
-Add your Gemini key or keys:
+Open `backend/.env` and replace the placeholder key:
 
 ```env
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_API_KEYS=your_primary_key,your_backup_key
-GEMINI_MODEL=gemini-2.5-flash
 LLM_PROVIDER=gemini
+LLM_API_KEYS=paste_your_real_api_key_here
+LLM_MODEL=gemini-2.5-flash
+LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
+GEMINI_TIMEOUT_SECONDS=20
 QUERY_ROW_LIMIT=100
 ```
 
-`GEMINI_API_KEYS` is optional, but useful on free tier. The backend tries the configured keys in order and falls back when a quota/rate/auth style error happens.
+Important:
 
-## Running Locally
+- Put real keys only in `backend/.env`.
+- Do not put real keys in `backend/.env.example`.
+- `backend/.env` is ignored by Git.
 
-Start the backend:
+## How To Run
 
-```bash
+Open two terminals.
+
+**Terminal 1: backend**
+
+```powershell
 cd backend
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Start the frontend:
+Check backend status:
 
-```bash
+```text
+http://127.0.0.1:8000/status
+```
+
+**Terminal 2: frontend**
+
+From the project root:
+
+```powershell
 npm run dev
 ```
 
-Open the Vite URL, upload a database, and ask questions in the chat widget.
+Open the Vite URL shown in the terminal. Usually:
 
-## API Endpoints
+```text
+http://localhost:5173
+```
 
-`POST /upload`
+Then:
 
-Uploads a database file, connects it, reads the schema, and stores the active session.
+1. Click the chat button.
+2. Upload a `.db`, `.sqlite`, or `.sql` file.
+3. Ask a question about the database.
 
-`POST /chat`
+Example:
 
-Receives a natural-language question, generates SQL, validates it, executes it safely, and returns a natural-language answer.
+```text
+How many orders are there?
+```
 
-`GET /status`
+## Tests
 
-Returns backend status, active database state, supported uploads, and LLM configuration summary.
+Run backend tests:
 
-`POST /clear`
+```powershell
+python -m pytest -q
+```
 
-Clears the active session and disconnects the database.
+Run frontend checks:
 
-## Supported Databases
-
-Currently supported:
-
-- SQLite `.db`
-- SQLite `.sqlite`
-- SQL dump `.sql`
-
-MySQL-style dump files are partially supported by normalizing common MySQL syntax into SQLite-compatible SQL before import.
-
-Live MySQL server connections are not implemented yet. The database layer is structured so MySQL, PostgreSQL, or SQL Server can be added later without changing the frontend chat flow.
-
-## Safety
-
-The backend validates generated SQL before execution:
-
-- Only `SELECT` and `WITH` queries are allowed
-- Dangerous keywords are blocked
-- Multiple SQL statements are blocked
-- Tables and columns are checked against the active schema
-- Query output is limited by `QUERY_ROW_LIMIT` unless the generated SQL already contains a limit
-
-The frontend never talks directly to Gemini. All LLM calls happen through FastAPI.
-
-## Testing
-
-Frontend:
-
-```bash
+```powershell
 npm run build
 npm run lint
 ```
 
-Backend syntax check:
+Optional backend syntax check:
 
-```bash
+```powershell
 python -m compileall backend
 ```
 
-The upload and chat pipeline has been tested with:
+## Common Errors
 
-- no database connected
-- unsupported upload extensions
-- SQLite upload
-- MySQL-style `.sql` dump upload
-- missing Gemini key
-- mocked full chat success
-- unsafe SQL blocking
+**`LLM API key is not configured`**
 
-## Roadmap
+Fix:
 
-- Real Gemini end-to-end testing with production keys
-- Provider interface for MCP server integration
-- Live MySQL/PostgreSQL connection support
-- SQL parser validation with `sqlglot`
-- Result table preview in the chat UI
-- CSV and Excel export
-- Chart generation
-- Authentication and multi-session support
-- Docker deployment
+- Make sure `backend/.env` exists.
+- Make sure it contains `LLM_API_KEYS=your_real_key`.
+- Restart the backend after editing `.env`.
+
+**`503 UNAVAILABLE` or model high demand**
+
+This means the LLM provider is temporarily busy.
+
+Fix:
+
+- Try again after a short wait.
+- Keep fallback models in `LLM_FALLBACK_MODELS`.
+
+**Frontend opens, but chat cannot connect**
+
+Fix:
+
+- Make sure the backend is running on `http://127.0.0.1:8000`.
+- Open `http://127.0.0.1:8000/status` and confirm it says `backend: online`.
+
+**`127.0.0.1:5173` does not open**
+
+Vite may be listening on `localhost`.
+
+Fix:
+
+- Open `http://localhost:5173`.
+- Or restart frontend with:
+
+```powershell
+npm run dev -- --host 127.0.0.1
+```
+
+**Uploaded database disappeared**
+
+The active database is stored in memory.
+
+Fix:
+
+- Re-upload the database after restarting the backend.
+
+**SSL or certificate error when calling the LLM**
+
+Fix:
+
+```powershell
+pip install -r requirements.txt
+```
+
+The project includes `python-certifi-win32` and `truststore` so Python can use trusted Windows certificates.
+
+**Port 8000 already in use**
+
+Fix:
+
+- Stop the old backend terminal.
+- Or run the backend on another port and update `src/services/api.ts`.
+
+## Notes
+
+- The frontend never calls the LLM directly.
+- Only the FastAPI backend talks to the LLM provider.
+- The current working provider is Gemini.
+- The code has a provider layer in `backend/llm.py`, so MCP or another LLM provider can be added later without rewriting the chat pipeline.
 
 ## Author
 

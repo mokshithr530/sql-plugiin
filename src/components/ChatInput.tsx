@@ -32,7 +32,7 @@ export default function ChatInput({
   };
 
   return (
-    <div className="border-t bg-white p-3">
+    <div className="border-t border-gray-200 bg-white p-3">
 
       {/* Attached Database */}
 
@@ -71,14 +71,14 @@ export default function ChatInput({
           }
           className="
             flex-1
-            rounded-full
+            rounded-lg
             border
             border-gray-300
-            px-4
-            py-3
+            px-3
+            py-2.5
             text-sm
             outline-none
-            focus:border-cyan-500
+            focus:border-gray-950
           "
         />
 
@@ -87,14 +87,14 @@ export default function ChatInput({
           className="
             h-11
             w-11
-            rounded-full
-            bg-cyan-500
-            hover:bg-cyan-600
+            rounded-lg
+            bg-gray-950
+            hover:bg-gray-800
             text-white
             flex
             items-center
             justify-center
-            transition
+            transition-colors
           "
         >
           <Send size={18} />

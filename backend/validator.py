@@ -104,15 +104,15 @@ class SQLValidator:
             if col == "*":
                 continue
 
+            if "(" in col:
+                continue
+
             if "." in col:
                 col = col.split(".")[-1]
 
             col = col.split(" AS ")[0]
 
             col = col.strip()
-
-            if "(" in col:
-                continue
 
             if col not in all_columns:
 

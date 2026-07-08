@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pandas
+python-dotenv
+google-genai
+python-multipart
+python-certifi-win32
+truststore

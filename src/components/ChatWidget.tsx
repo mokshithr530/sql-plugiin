@@ -23,24 +23,22 @@ export default function ChatWidget() {
         fixed
         bottom-6
         right-6
-        h-16
-        w-16
-        rounded-full
-        bg-gradient-to-r
-        from-cyan-500
-        to-blue-600
+        h-14
+        w-14
+        rounded-lg
+        bg-gray-950
         text-white
-        shadow-xl
+        shadow-lg
         flex
         items-center
         justify-center
-        hover:scale-110
+        hover:bg-gray-800
         transition-all
-        duration-300
+        duration-150
         z-50
       "
       >
-        {open ? <X size={30} /> : <MessageCircle size={30} />}
+        {open ? <X size={22} /> : <MessageCircle size={22} />}
       </button>
 
       {/* Widget */}
@@ -51,13 +49,17 @@ export default function ChatWidget() {
         bottom-24
         right-6
         w-[390px]
-        h-[650px]
-        rounded-3xl
+        max-w-[calc(100vw-2rem)]
+        h-[620px]
+        max-h-[calc(100vh-7rem)]
+        rounded-lg
         bg-white
-        shadow-[0_15px_45px_rgba(0,0,0,0.18)]
+        border
+        border-gray-200
+        shadow-2xl
         overflow-hidden
         transition-all
-        duration-300
+        duration-150
         origin-bottom-right
         flex
         flex-col
