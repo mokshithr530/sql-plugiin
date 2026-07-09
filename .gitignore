@@ -19,6 +19,7 @@ uploads/
 temp_databases/
 backend/uploads/
 backend/temp_databases/
+backend/runtime/
 .venv/
 venv/
 

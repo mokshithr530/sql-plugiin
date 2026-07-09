@@ -17,7 +17,7 @@ class DatabaseManager:
 
         extension = os.path.splitext(database_path)[1].lower()
 
-        if extension in [".db", ".sqlite"]:
+        if extension in [".db", ".sqlite", ".sqlite3"]:
             self.connection = sqlite3.connect(
                 database_path,
                 check_same_thread=False

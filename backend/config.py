@@ -15,7 +15,7 @@ if load_dotenv:
 # LLM Configuration
 # ============================
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto").strip().lower()
 
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 
@@ -27,8 +27,11 @@ LLM_API_KEYS = [
 
 LLM_MODEL = os.getenv(
     "LLM_MODEL",
-    os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+    os.getenv("GEMINI_MODEL", ""),
 )
+
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
 LLM_FALLBACK_MODELS = [
     model.strip()
@@ -51,6 +54,8 @@ GEMINI_API_KEYS = [
 ]
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", LLM_MODEL)
+if not GEMINI_MODEL:
+    GEMINI_MODEL = "gemini-2.5-flash"
 
 GEMINI_FALLBACK_MODELS = [
     model.strip()
@@ -74,16 +79,25 @@ TEMP_DATABASE_FOLDER = str(BASE_DIR / "temp_databases")
 SUPPORTED_DATABASES = [
     ".db",
     ".sqlite",
+    ".sqlite3",
     ".sql"
 ]
 
 SUPPORTED_DATABASE_NOTES = {
     ".db": "SQLite database file",
     ".sqlite": "SQLite database file",
+    ".sqlite3": "SQLite database file",
     ".sql": "SQL dump imported into SQLite"
 }
 
 QUERY_ROW_LIMIT = int(os.getenv("QUERY_ROW_LIMIT", "100"))
+
+# Standalone MCP server. Use an absolute path when launching it outside backend/.
+MCP_DATABASE_PATH = os.getenv("MCP_DATABASE_PATH", "")
+
+# Optional response cache. Leave REDIS_URL blank to run without Redis.
+REDIS_URL = os.getenv("REDIS_URL", "")
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
 
 # ============================
 # Session Configuration

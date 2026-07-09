@@ -6,3 +6,5 @@ google-genai
 python-multipart
 python-certifi-win32
 truststore
+mcp
+redis

@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import hashlib
 from config import TEMP_DATABASE_FOLDER
 
 
@@ -17,9 +18,12 @@ class SQLImporter:
         temp_folder = TEMP_DATABASE_FOLDER
         os.makedirs(temp_folder, exist_ok=True)
 
+        source_id = hashlib.sha256(
+            os.path.abspath(sql_file_path).encode("utf-8")
+        ).hexdigest()[:12]
         db_name = (
             os.path.splitext(os.path.basename(sql_file_path))[0]
-            + "_temp.sqlite"
+            + f"_{source_id}_temp.sqlite"
         )
 
         self.temp_db_path = os.path.join(temp_folder, db_name)

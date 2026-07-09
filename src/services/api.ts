@@ -1,5 +1,6 @@
 import type { ChatResponse } from "../types/chat";
 import type { UploadResponse } from "../types/database";
+import { getSessionId } from "./session";
 
 const API = "http://127.0.0.1:8000";
 
@@ -29,6 +30,7 @@ export async function uploadDatabase(file: File): Promise<UploadResponse & ApiEr
     const formData = new FormData();
 
     formData.append("file", file);
+    formData.append("session_id", getSessionId());
 
     const response = await fetch(`${API}/upload`, {
 
@@ -52,7 +54,8 @@ export async function sendMessage(question: string): Promise<ChatResponse> {
         },
 
         body: JSON.stringify({
-            question
+            question,
+            session_id: getSessionId()
         })
 
     });
@@ -62,14 +65,24 @@ export async function sendMessage(question: string): Promise<ChatResponse> {
 
 export async function getStatus() {
 
-    const response = await fetch(`${API}/status`);
+    const response = await fetch(
+        `${API}/status?session_id=${encodeURIComponent(getSessionId())}`
+    );
 
     return readJsonResponse(response);
 }
 
 export async function clearSession() {
 
-    const response = await fetch(`${API}/clear`);
+    const response = await fetch(`${API}/clear`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            session_id: getSessionId()
+        })
+    });
 
     return readJsonResponse(response);
 }

@@ -1,4 +1,7 @@
 import os
+import json
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
 
 try:
@@ -27,9 +30,17 @@ from config import (
     GEMINI_FALLBACK_MODELS,
     GEMINI_MODEL,
     GEMINI_TIMEOUT_SECONDS,
+    LLM_API_KEYS,
+    LLM_BASE_URL,
+    LLM_MODEL,
     LLM_PROVIDER,
+    LLM_TIMEOUT_SECONDS,
 )
 from session_memory import session_memory
+from metrics import token_metrics
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _clean_sql(sql):
@@ -50,7 +61,7 @@ class BaseLLMProvider(ABC):
         self.model_name = model_name
 
     @abstractmethod
-    def generate(self, prompt):
+    def generate(self, prompt, call_type="generate"):
         raise NotImplementedError
 
 
@@ -102,7 +113,7 @@ class GeminiProvider(BaseLLMProvider):
         ]
         return any(marker in message for marker in retry_markers)
 
-    def generate(self, prompt):
+    def generate(self, prompt, call_type="generate"):
         if not self.api_keys or self.client is None:
             raise RuntimeError(
                 "LLM API key is not configured. Set LLM_API_KEY, LLM_API_KEYS, GEMINI_API_KEY, or GEMINI_API_KEYS in backend/.env."
@@ -120,6 +131,23 @@ class GeminiProvider(BaseLLMProvider):
                         model=model_name,
                         contents=prompt,
                     )
+
+                    # Track token usage
+                    try:
+                        if hasattr(response, 'usage_metadata'):
+                            input_tokens = response.usage_metadata.input_token_count or 0
+                            output_tokens = response.usage_metadata.output_token_count or 0
+                        elif hasattr(response, 'usage'):
+                            input_tokens = response.usage.prompt_tokens or 0
+                            output_tokens = response.usage.candidates_tokens or 0
+                        else:
+                            input_tokens = 0
+                            output_tokens = 0
+
+                        token_metrics.add_tokens(call_type, input_tokens, output_tokens)
+                    except Exception as token_error:
+                        logger.warning(f"Could not capture token metrics: {token_error}")
+
                     return response.text.strip()
                 except Exception as error:
                     last_error = error
@@ -140,18 +168,89 @@ class GeminiProvider(BaseLLMProvider):
         )
 
 
-class MCPProvider(BaseLLMProvider):
-    def __init__(self):
-        super().__init__("mcp", "unconfigured")
+class JsonAPIProvider(BaseLLMProvider):
+    def __init__(self, provider_name, model_name, api_keys, timeout_seconds, base_url=""):
+        super().__init__(provider_name, model_name)
+        self.api_keys = api_keys
+        self.timeout_seconds = timeout_seconds
+        self.base_url = base_url
 
-    def generate(self, prompt):
-        raise RuntimeError(
-            "MCP provider is not implemented yet. Add an MCP-backed provider in backend/llm.py."
+    def _request(self, url, headers, payload):
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", **headers},
+            method="POST",
         )
+        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def generate(self, prompt, call_type="generate"):
+        if not self.api_keys:
+            raise RuntimeError("LLM API key is not configured in backend/.env.")
+
+        last_error = None
+        for api_key in self.api_keys:
+            try:
+                if self.provider_name == "anthropic":
+                    data = self._request(
+                        self.base_url or "https://api.anthropic.com/v1/messages",
+                        {
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01",
+                        },
+                        {
+                            "model": self.model_name or "claude-sonnet-4-20250514",
+                            "max_tokens": 2048,
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                    usage = data.get("usage", {})
+                    token_metrics.add_tokens(
+                        call_type,
+                        usage.get("input_tokens", 0),
+                        usage.get("output_tokens", 0),
+                    )
+                    return data["content"][0]["text"].strip()
+
+                base_url = self.base_url or "https://api.openai.com/v1"
+                data = self._request(
+                    f"{base_url}/chat/completions",
+                    {"Authorization": f"Bearer {api_key}"},
+                    {
+                        "model": self.model_name or "gpt-4.1-mini",
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
+                usage = data.get("usage", {})
+                token_metrics.add_tokens(
+                    call_type,
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                )
+                return data["choices"][0]["message"]["content"].strip()
+            except (KeyError, urllib.error.HTTPError, urllib.error.URLError) as error:
+                last_error = error
+
+        raise RuntimeError(f"{self.provider_name} request failed: {last_error}")
+
+
+def _resolved_provider():
+    if LLM_PROVIDER != "auto":
+        return LLM_PROVIDER
+    key = LLM_API_KEYS[0] if LLM_API_KEYS else ""
+    if key.startswith("sk-ant-"):
+        return "anthropic"
+    if key.startswith("AIza"):
+        return "gemini"
+    if key.startswith("sk-"):
+        return "openai"
+    return "gemini"
 
 
 def create_provider():
-    if LLM_PROVIDER == "gemini":
+    provider = _resolved_provider()
+    if provider == "gemini":
         return GeminiProvider(
             model_name=GEMINI_MODEL,
             fallback_models=GEMINI_FALLBACK_MODELS,
@@ -159,18 +258,24 @@ def create_provider():
             timeout_seconds=GEMINI_TIMEOUT_SECONDS,
         )
 
-    if LLM_PROVIDER == "mcp":
-        return MCPProvider()
+    if provider in {"anthropic", "openai", "openai-compatible"}:
+        return JsonAPIProvider(
+            provider_name="anthropic" if provider == "anthropic" else "openai",
+            model_name=LLM_MODEL,
+            api_keys=LLM_API_KEYS,
+            timeout_seconds=LLM_TIMEOUT_SECONDS,
+            base_url=LLM_BASE_URL,
+        )
 
-    raise RuntimeError(f"Unsupported LLM provider: {LLM_PROVIDER}")
+    raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
 
 class LLMService:
     def __init__(self, provider):
         self.provider = provider
 
-    def _generate(self, prompt):
-        return self.provider.generate(prompt)
+    def _generate(self, prompt, call_type="generate"):
+        return self.provider.generate(prompt, call_type)
 
     def _conversation_history(self):
         history = session_memory.get_chat_history()
@@ -229,7 +334,7 @@ Common ecommerce patterns:
   LIMIT 10
 """
 
-        return _clean_sql(self._generate(prompt))
+        return _clean_sql(self._generate(prompt, "generate_sql"))
 
     def generate_answer(self, question, dataframe):
         prompt = f"""
@@ -257,7 +362,7 @@ Rules:
 11. Use 2-4 short sentences for analysis questions; use a short bullet list only when comparing several rows.
 """
 
-        return _clean_answer(self._generate(prompt))
+        return _clean_answer(self._generate(prompt, "generate_answer"))
 
     def rewrite_failed_sql(self, question, schema_prompt, failed_sql, error_message):
         prompt = f"""
@@ -281,7 +386,7 @@ Return only one corrected SQLite SELECT or WITH query.
 Do not explain, do not use markdown, and do not include unsafe SQL.
 """
 
-        return _clean_sql(self._generate(prompt))
+        return _clean_sql(self._generate(prompt, "rewrite_failed_sql"))
 
     def summarize_schema(self, schema_prompt):
         prompt = f"""

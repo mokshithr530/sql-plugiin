@@ -91,7 +91,7 @@ LLM explains result
 Return answer + SQL + rows
 ```
 
-LLM/provider design:
+LLM and MCP design:
 
 ```text
 chat_pipeline.py
@@ -102,11 +102,20 @@ LLMService
   v
 Provider
   |
-  +--> GeminiProvider       currently implemented
+  +--> Gemini
   |
-  +--> MCPProvider          placeholder for future MCP
+  +--> Anthropic
   |
-  +--> Other providers      can be added later
+  +--> OpenAI-compatible APIs
+
+MCP client (Claude Desktop, Claude Code, or another host)
+  |
+  v
+backend/mcp_server.py
+  |
+  +--> inspect_schema
+  |
+  +--> execute_read_query (read-only)
 ```
 
 The frontend never calls the LLM directly. All provider calls happen inside the FastAPI backend.
@@ -129,13 +138,48 @@ copy backend\.env.example backend\.env
 Open `backend/.env` and replace the placeholder key:
 
 ```env
-LLM_PROVIDER=gemini
+LLM_PROVIDER=auto
 LLM_API_KEYS=paste_your_real_api_key_here
-LLM_MODEL=gemini-2.5-flash
+LLM_MODEL=
 LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
 GEMINI_TIMEOUT_SECONDS=20
 QUERY_ROW_LIMIT=100
 ```
+
+`auto` recognizes Gemini (`AIza...`), Anthropic (`sk-ant-...`), and OpenAI
+(`sk-...`) keys. Set `LLM_PROVIDER` explicitly for unusual key formats. For an
+OpenAI-compatible service, also set `LLM_BASE_URL`.
+
+## MCP Server
+
+Set an absolute SQLite path in `backend/.env`:
+
+```env
+MCP_DATABASE_PATH=C:\absolute\path\to\database.sqlite
+```
+
+Start the stdio MCP server with:
+
+```powershell
+python backend\mcp_server.py
+```
+
+Configure your MCP host to run that command from this project directory. MCP is
+independent of the LLM provider, so Claude, OpenAI, Gemini, or another MCP host
+can use the same tools.
+
+## Redis Cache
+
+Redis is optional. To cache repeated answers:
+
+```env
+REDIS_URL=redis://localhost:6379/0
+CACHE_TTL_SECONDS=3600
+```
+
+When Redis is unavailable or `REDIS_URL` is blank, the app continues without
+caching. Cache entries are separated by question, database fingerprint,
+provider, and model.
 
 Important:
 
@@ -275,8 +319,8 @@ Fix:
 
 - The frontend never calls the LLM directly.
 - Only the FastAPI backend talks to the LLM provider.
-- The current working provider is Gemini.
-- The code has a provider layer in `backend/llm.py`, so MCP or another LLM provider can be added later without rewriting the chat pipeline.
+- Gemini, Anthropic, and OpenAI-compatible providers are supported.
+- MCP exposes the database tools and is intentionally separate from provider selection.
 
 ## Author
 

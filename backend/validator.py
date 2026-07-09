@@ -47,6 +47,14 @@ class SQLValidator:
     def validate_tables(self, sql):
 
         tables = schema_reader.get_tables()
+        cte_names = {
+            name.lower()
+            for name in re.findall(
+                r"(?:\bWITH\b|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(",
+                sql,
+                flags=re.IGNORECASE,
+            )
+        }
 
         matches = re.findall(
 
@@ -60,7 +68,7 @@ class SQLValidator:
 
         for table in matches:
 
-            if table not in tables:
+            if table.lower() not in {name.lower() for name in tables} and table.lower() not in cte_names:
 
                 return failure(
                     error=f"Table '{table}' does not exist.",

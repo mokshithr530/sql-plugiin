@@ -52,8 +52,7 @@ Completed:
 
 Still left:
 
-- Actual MCP provider implementation.
-- Support for non-Gemini providers such as OpenAI or Anthropic.
+- Connect and verify the MCP server in the manager's chosen MCP host.
 - Browser end-to-end automated tests.
 - More tests for `.sql` import and retry behavior.
 - Generalize deterministic business-analysis templates beyond Olist-style ecommerce schemas.
@@ -127,7 +126,8 @@ Current structure:
 - `chat_pipeline.py` calls `llm.generate_sql()`, `llm.rewrite_failed_sql()`, and `llm.generate_answer()`.
 - `llm.py` owns prompt construction and provider calls.
 - `GeminiProvider` is currently implemented.
-- `MCPProvider` exists as a placeholder for future MCP work.
+- Gemini, Anthropic, and OpenAI-compatible provider adapters are implemented.
+- Provider auto-detection handles common API-key prefixes.
 - `config.py` supports generic `LLM_*` environment variables.
 
 Current working provider:
@@ -163,17 +163,15 @@ Important clarification:
 
 ---
 
-## MCP Readiness
+## MCP Server
 
-MCP should be added at the provider layer only.
-
-Expected future MCP path:
+MCP is a tool protocol, not an LLM provider. The implemented path is:
 
 ```text
-chat_pipeline.py
--> LLMService
--> MCPProvider
--> MCP server/tool call
+MCP host
+-> backend/mcp_server.py
+-> inspect_schema / execute_read_query
+-> read-only SQLite connection
 ```
 
 Files that should usually not need major changes for MCP:
@@ -184,11 +182,13 @@ Files that should usually not need major changes for MCP:
 - `sql_executor.py`
 - `validator.py`
 
-Files likely involved in MCP work:
+The server is provider-independent and can be used by Claude or any other
+MCP-compatible host. SQL connections use SQLite read-only mode and results are
+bounded by `QUERY_ROW_LIMIT`.
 
-- `backend/llm.py`
-- `backend/config.py`
-- tests for MCP/provider behavior
+Redis response caching is optional. When `REDIS_URL` is configured, successful
+answers are cached using the normalized question, database file fingerprint,
+provider, and model. A Redis outage does not stop the application.
 
 Do not put MCP logic into React components. Keep provider-specific logic inside the backend provider layer.
 
@@ -473,8 +473,10 @@ http://127.0.0.1:8000/status
 - Sessions are stored in memory only.
 - Uploaded database must be re-uploaded after backend restart.
 - Only one active database/session is supported.
-- Only Gemini provider is implemented today.
-- MCP provider is a placeholder, not functional yet.
+- Provider key auto-detection depends on common key prefixes; unusual providers
+  should set `LLM_PROVIDER`, `LLM_MODEL`, and optionally `LLM_BASE_URL`.
+- MCP currently supports `.db` and `.sqlite`; `.sql` dumps should first be
+  imported through the web application.
 - SQL validation is conservative and regex-based.
 - POC business-analysis shortcuts currently target Olist-style ecommerce schemas.
 - True profit/loss requires cost, margin, refund, or expense data. If those fields are missing, the app reports revenue at risk instead.

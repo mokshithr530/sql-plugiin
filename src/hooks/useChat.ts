@@ -38,7 +38,8 @@ export function useChat() {
                     role: "assistant",
                     content: response.success
                         ? response.answer
-                        : `${response.answer}\n\nYou can also try asking the same question with more specific table or column words.`
+                        : `${response.answer}\n\nYou can also try asking the same question with more specific table or column words.`,
+                    metrics: response.metrics
                 }
             ]);
         } catch (err) {

@@ -4,6 +4,11 @@ from schema_reader import SchemaReader
 from session_memory import session_memory
 from sql_executor import sql_executor
 from validator import validator
+from metrics import token_metrics
+from response_cache import response_cache
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ChatPipeline:
@@ -152,8 +157,18 @@ LIMIT 10
 """.strip()
 
     def ask(self, question):
+        # Start token tracking
+        token_metrics.start()
+
         self._ensure_database()
         question = self._validate_question(question)
+        database_path = session_memory.get_database()["database_path"]
+        cached = response_cache.get(question, database_path)
+        if cached:
+            cached["cache_hit"] = True
+            session_memory.add_message("user", question)
+            session_memory.add_message("assistant", cached["answer"])
+            return cached
 
         reader = SchemaReader()
         schema_prompt = reader.get_schema_prompt()
@@ -184,6 +199,8 @@ LIMIT 10
 
         if not validation["success"]:
             session_memory.set_last_error(validation["error"])
+            metrics = token_metrics.get_metrics_summary()
+            token_metrics.log_summary()
             return {
                 "success": False,
                 "answer": (
@@ -194,6 +211,7 @@ LIMIT 10
                 "sql": sql,
                 "result": None,
                 "error": validation["error"],
+                "metrics": metrics,
             }
 
         execution = sql_executor.execute_safe(sql)
@@ -222,6 +240,8 @@ LIMIT 10
 
         if not execution["success"]:
             session_memory.set_last_error(execution["error"])
+            metrics = token_metrics.get_metrics_summary()
+            token_metrics.log_summary()
             return {
                 "success": False,
                 "answer": (
@@ -232,6 +252,7 @@ LIMIT 10
                 "sql": sql,
                 "result": None,
                 "error": execution["error"],
+                "metrics": metrics,
             }
 
         dataframe = execution["data"]["dataframe"]
@@ -249,13 +270,20 @@ LIMIT 10
         session_memory.set_last_result(result)
         session_memory.set_last_error(None)
 
-        return {
+        metrics = token_metrics.get_metrics_summary()
+        token_metrics.log_summary()
+
+        response = {
             "success": True,
             "answer": answer,
             "sql": sql,
             "result": result,
             "error": None,
+            "metrics": metrics,
+            "cache_hit": False,
         }
+        response_cache.set(question, database_path, response)
+        return response
 
 
 chat_pipeline = ChatPipeline()

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Message } from "../types/chat";
+import MetricsDisplay from "./MetricsDisplay";
 
 interface ChatMessagesProps {
   messages: Message[];
@@ -30,23 +31,31 @@ export default function ChatMessages({
       "
     >
       {messages.map((message, index) => (
-        <div
-          key={index}
-          className={`flex ${
-            message.role === "user"
-              ? "justify-end"
-              : "justify-start"
-          }`}
-        >
+        <div key={index}>
           <div
-            className={`max-w-[88%] rounded-lg border px-3.5 py-2.5 whitespace-pre-wrap text-sm leading-6 ${
+            className={`flex ${
               message.role === "user"
-                ? "border-gray-950 bg-gray-950 text-white"
-                : "border-gray-200 bg-white text-gray-800"
+                ? "justify-end"
+                : "justify-start"
             }`}
           >
-            {message.content}
+            <div
+              className={`max-w-[88%] rounded-lg border px-3.5 py-2.5 whitespace-pre-wrap text-sm leading-6 ${
+                message.role === "user"
+                  ? "border-gray-950 bg-gray-950 text-white"
+                  : "border-gray-200 bg-white text-gray-800"
+              }`}
+            >
+              {message.content}
+            </div>
           </div>
+          {message.role === "assistant" && message.metrics && (
+            <div className="mt-2 ml-0 flex justify-start">
+              <div className="max-w-[88%]">
+                <MetricsDisplay metrics={message.metrics} />
+              </div>
+            </div>
+          )}
         </div>
       ))}
 
