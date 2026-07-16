@@ -2,7 +2,7 @@ import type { ChatResponse } from "../types/chat";
 import type { UploadResponse } from "../types/database";
 import { getSessionId } from "./session";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 type ApiErrorResponse = {
     success?: false;
@@ -38,6 +38,27 @@ export async function uploadDatabase(file: File): Promise<UploadResponse & ApiEr
 
         body: formData
 
+    });
+
+    return readJsonResponse<UploadResponse & ApiErrorResponse>(response);
+}
+
+export async function listMySQLDatabases(): Promise<{ success: boolean; databases: string[] }> {
+    const response = await fetch(`${API}/mysql/databases`);
+
+    return readJsonResponse<{ success: boolean; databases: string[] }>(response);
+}
+
+export async function attachMySQLDatabase(database: string): Promise<UploadResponse & ApiErrorResponse> {
+    const response = await fetch(`${API}/mysql/attach`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            database,
+            session_id: getSessionId()
+        })
     });
 
     return readJsonResponse<UploadResponse & ApiErrorResponse>(response);

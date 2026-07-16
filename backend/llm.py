@@ -135,8 +135,17 @@ class GeminiProvider(BaseLLMProvider):
                     # Track token usage
                     try:
                         if hasattr(response, 'usage_metadata'):
-                            input_tokens = response.usage_metadata.input_token_count or 0
-                            output_tokens = response.usage_metadata.output_token_count or 0
+                            usage = response.usage_metadata
+                            input_tokens = (
+                                getattr(usage, "input_token_count", None)
+                                or getattr(usage, "prompt_token_count", None)
+                                or 0
+                            )
+                            output_tokens = (
+                                getattr(usage, "output_token_count", None)
+                                or getattr(usage, "candidates_token_count", None)
+                                or 0
+                            )
                         elif hasattr(response, 'usage'):
                             input_tokens = response.usage.prompt_tokens or 0
                             output_tokens = response.usage.candidates_tokens or 0
@@ -182,8 +191,12 @@ class JsonAPIProvider(BaseLLMProvider):
             headers={"Content-Type": "application/json", **headers},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {error.code}: {body}") from error
 
     def generate(self, prompt, call_type="generate"):
         if not self.api_keys:
@@ -213,7 +226,10 @@ class JsonAPIProvider(BaseLLMProvider):
                     )
                     return data["content"][0]["text"].strip()
 
-                base_url = self.base_url or "https://api.openai.com/v1"
+                if self.provider_name == "openrouter":
+                    base_url = self.base_url or "https://openrouter.ai/api/v1"
+                else:
+                    base_url = self.base_url or "https://api.openai.com/v1"
                 data = self._request(
                     f"{base_url}/chat/completions",
                     {"Authorization": f"Bearer {api_key}"},
@@ -229,7 +245,7 @@ class JsonAPIProvider(BaseLLMProvider):
                     usage.get("completion_tokens", 0),
                 )
                 return data["choices"][0]["message"]["content"].strip()
-            except (KeyError, urllib.error.HTTPError, urllib.error.URLError) as error:
+            except (KeyError, RuntimeError, urllib.error.URLError) as error:
                 last_error = error
 
         raise RuntimeError(f"{self.provider_name} request failed: {last_error}")
@@ -241,6 +257,8 @@ def _resolved_provider():
     key = LLM_API_KEYS[0] if LLM_API_KEYS else ""
     if key.startswith("sk-ant-"):
         return "anthropic"
+    if key.startswith("sk-or-"):
+        return "openrouter"
     if key.startswith("AIza"):
         return "gemini"
     if key.startswith("sk-"):
@@ -258,10 +276,10 @@ def create_provider():
             timeout_seconds=GEMINI_TIMEOUT_SECONDS,
         )
 
-    if provider in {"anthropic", "openai", "openai-compatible"}:
+    if provider in {"anthropic", "openai", "openai-compatible", "openrouter"}:
         return JsonAPIProvider(
-            provider_name="anthropic" if provider == "anthropic" else "openai",
-            model_name=LLM_MODEL,
+            provider_name=provider if provider in {"anthropic", "openrouter"} else "openai",
+            model_name=LLM_MODEL or ("deepseek/deepseek-v4-pro" if provider == "openrouter" else ""),
             api_keys=LLM_API_KEYS,
             timeout_seconds=LLM_TIMEOUT_SECONDS,
             base_url=LLM_BASE_URL,
@@ -336,6 +354,89 @@ Common ecommerce patterns:
 
         return _clean_sql(self._generate(prompt, "generate_sql"))
 
+    def generate_sqlserver_sql(self, question, schema_prompt):
+        prompt = f"""
+You are a senior data analyst and SQL Server engineer.
+
+Task:
+Convert the user's natural-language question into one safe SQL Server SELECT query.
+
+Database schema:
+{schema_prompt}
+
+Recent conversation:
+{self._conversation_history()}
+
+Current question:
+{question}
+
+Rules:
+1. Return only executable SQL. No markdown, comments, explanation, or code fences.
+2. Use only SELECT or WITH queries.
+3. Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, MERGE, EXEC, EXECUTE, stored procedures, USE, or multiple statements.
+4. Use only tables and columns that exist in the schema.
+5. Use SQL Server syntax. Use TOP, not LIMIT.
+6. Do not use cross-database names like database.schema.table.
+7. Prefer explicit column names over SELECT *.
+8. Add TOP for broad lists or rankings.
+9. Infer joins from shared ID columns when foreign keys are not declared.
+"""
+
+        return _clean_sql(self._generate(prompt, "generate_sql"))
+
+    def generate_mysql_sql(self, question, schema_prompt):
+        prompt = f"""
+You are a senior data analyst and MySQL engineer.
+
+Task:
+Convert the user's natural-language question into one safe MySQL SELECT query.
+
+Database schema:
+{schema_prompt}
+
+Recent conversation:
+{self._conversation_history()}
+
+Current question:
+{question}
+
+Rules:
+1. Return only executable SQL. No markdown, comments, explanation, or code fences.
+2. Use only SELECT or WITH queries.
+3. Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, REPLACE, LOAD, LOCK, UNLOCK, USE, or multiple statements.
+4. Use only tables and columns that exist in the schema.
+5. Use MySQL syntax. Use LIMIT, not TOP.
+6. Do not use cross-database names like database.table.
+7. Prefer explicit column names over SELECT *.
+8. Add LIMIT for broad lists or rankings.
+9. Infer joins from shared ID columns when foreign keys are not declared.
+"""
+
+        return _clean_sql(self._generate(prompt, "generate_sql"))
+
+    def generate_metadata_answer(self, question, metadata):
+        prompt = f"""
+You are explaining an ERP/database to a manager.
+
+User question:
+{question}
+
+Compact database metadata:
+{metadata}
+
+Write a concise manager-friendly answer.
+
+Rules:
+1. Do not write SQL.
+2. Do not invent business facts that are not in the metadata.
+3. Use a short summary first.
+4. Then use bullets for modules, important tables, and available analysis areas.
+5. Mention limitations briefly if the metadata is incomplete.
+6. Keep it under 180 words.
+"""
+
+        return _clean_answer(self._generate(prompt, "metadata_answer"))
+
     def generate_answer(self, question, dataframe):
         prompt = f"""
 You are a helpful data analyst speaking to a business user.
@@ -346,12 +447,12 @@ User question:
 SQL result:
 {dataframe.to_string(index=False)}
 
-Write the final answer in a natural, human style.
+Write the final answer in a natural, manager-friendly style.
 
 Rules:
-1. Answer the question directly in the first sentence.
+1. Start with a short summary.
 2. Use the actual values from the SQL result.
-3. If there are multiple rows, summarize the top findings in plain English.
+3. If there are multiple rows, use concise bullets or a compact markdown table.
 4. For recommendation questions like "what should I focus on", explain why the top option is attractive and mention one tradeoff if the data supports it.
 5. If columns include revenue and units/count, compare both instead of only naming the first row.
 6. If columns include revenue_at_risk, explain that this is a proxy for possible loss, not true profit/loss, unless actual cost or margin columns are present.
@@ -359,7 +460,7 @@ Rules:
 8. Do not mention "SQL result", "dataframe", "snippet", or internal execution details.
 9. Do not sound robotic. Be clear, warm, and concise.
 10. Do not invent anything outside the result.
-11. Use 2-4 short sentences for analysis questions; use a short bullet list only when comparing several rows.
+11. Add "Limitations" only when the data cannot support the requested KPI.
 """
 
         return _clean_answer(self._generate(prompt, "generate_answer"))
@@ -384,6 +485,29 @@ Use only tables and columns from the schema above. If the user asks about produc
 
 Return only one corrected SQLite SELECT or WITH query.
 Do not explain, do not use markdown, and do not include unsafe SQL.
+"""
+
+        return _clean_sql(self._generate(prompt, "rewrite_failed_sql"))
+
+    def rewrite_failed_mysql_sql(self, question, schema_prompt, failed_sql, error_message):
+        prompt = f"""
+You are repairing a failed MySQL query.
+
+Original question:
+{question}
+
+Database schema:
+{schema_prompt}
+
+Failed SQL:
+{failed_sql}
+
+Validation or database error:
+{error_message}
+
+Return only one corrected MySQL SELECT or WITH query.
+Do not explain, do not use markdown, and do not include unsafe SQL.
+Use LIMIT for broad result sets.
 """
 
         return _clean_sql(self._generate(prompt, "rewrite_failed_sql"))

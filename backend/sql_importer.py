@@ -6,6 +6,8 @@ from config import TEMP_DATABASE_FOLDER
 
 
 class SQLImporter:
+    SQL_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
+
     def __init__(self):
         self.temp_db_path = None
 
@@ -35,18 +37,48 @@ class SQLImporter:
         connection = sqlite3.connect(self.temp_db_path)
 
         try:
-            with open(sql_file_path, "r", encoding="utf-8") as file:
-                sql_script = file.read()
+            sql_script = self._read_sql_script(sql_file_path)
 
             sql_script = self._normalize_sql_dump(sql_script)
 
             connection.executescript(sql_script)
             connection.commit()
 
-        finally:
+        except Exception:
             connection.close()
+            if os.path.exists(self.temp_db_path):
+                os.remove(self.temp_db_path)
+            raise
+
+        finally:
+            if connection:
+                connection.close()
+
+        if os.path.getsize(self.temp_db_path) == 0:
+            os.remove(self.temp_db_path)
+            raise sqlite3.DatabaseError("SQL dump did not create a readable SQLite database.")
 
         return self.temp_db_path
+
+    def _read_sql_script(self, sql_file_path: str) -> str:
+        last_error = None
+        for encoding in self.SQL_ENCODINGS:
+            try:
+                with open(sql_file_path, "r", encoding=encoding) as file:
+                    return file.read()
+            except UnicodeDecodeError as error:
+                last_error = error
+
+        raise UnicodeDecodeError(
+            last_error.encoding,
+            last_error.object,
+            last_error.start,
+            last_error.end,
+            (
+                "Could not decode SQL dump. Save it as UTF-8, CP1252, or Latin-1 "
+                "and try again."
+            ),
+        )
 
     def _normalize_sql_dump(self, sql_script: str) -> str:
         script = sql_script

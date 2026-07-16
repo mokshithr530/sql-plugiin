@@ -1,14 +1,15 @@
 # SQL Assistant POC
 
-A small proof-of-concept app for asking questions about an uploaded SQL database in natural language.
+A proof-of-concept app for asking business questions about SQL data in natural language.
 
-You upload a `.db`, `.sqlite`, or `.sql` file. The backend reads the schema, asks the configured LLM to generate SQL, validates the SQL, runs it safely, and returns a short answer.
+You can upload SQLite databases, import SQL dumps, or connect to an existing configured MySQL database. The backend inspects the schema, narrows the relevant tables, asks the configured LLM only when needed, validates generated SQL, runs read-only queries, and returns a manager-friendly answer with tables, bullets, limitations, and confidence.
 
 ## Stack
 
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: FastAPI, SQLite, Pandas
-- LLM: configured through `backend/.env`
+- Backend: FastAPI, SQLite, MySQL, SQL Server, Pandas
+- Cache: Redis, optional
+- LLM: configured through `backend/.env` with provider abstraction
 
 ## Architecture
 
@@ -26,42 +27,44 @@ src/services/api.ts
   v
 FastAPI backend
   |
-  +--> Upload / schema / session
+  +--> Upload / connect / schema / session
   |
   +--> Chat pipeline
+          |
+          +--> Business catalog + schema narrowing
           |
           +--> LLM provider layer
           |
           +--> SQL validator
           |
-          +--> SQL executor
+          +--> SQLite / MySQL / SQL Server executor
           |
           v
-        Answer returned to UI
+        Table + summary + confidence returned to UI
 ```
 
 Upload flow:
 
 ```text
-User uploads database
+User chooses data source
   |
   v
-POST /upload
+POST /upload or /mysql/attach
   |
   v
-Validate file type
+Validate file type or configured database
   |
   v
-Save file in backend/uploads
+SQLite: save and query directly
+MySQL .sql: stream import into MySQL
+SQL Server .sql: import into SQL Server when enabled
+Existing MySQL: attach without re-importing
   |
   v
-Connect SQLite database
+Read tables, columns, relationships
   |
   v
-Read tables, columns, foreign keys
-  |
-  v
-Store active database in session memory
+Store safe session metadata
 ```
 
 Chat flow:
@@ -73,10 +76,13 @@ User asks question
 POST /chat
   |
   v
-Read active schema
+Read session database
   |
   v
-LLM generates SQL
+Classify intent and narrow schema
+  |
+  v
+Generate SQL only when needed
   |
   v
 Validate SQL safety
@@ -85,10 +91,10 @@ Validate SQL safety
 Execute SQL
   |
   v
-LLM explains result
+Format result into answer, table, limitations, confidence
   |
   v
-Return answer + SQL + rows
+Return answer + SQL + rows + confidence
 ```
 
 LLM and MCP design:
@@ -102,9 +108,11 @@ LLMService
   v
 Provider
   |
+  +--> Anthropic
+  |
   +--> Gemini
   |
-  +--> Anthropic
+  +--> OpenRouter
   |
   +--> OpenAI-compatible APIs
 
@@ -114,6 +122,12 @@ MCP client (Claude Desktop, Claude Code, or another host)
 backend/mcp_server.py
   |
   +--> inspect_schema
+  |
+  +--> analyze_question
+  |
+  +--> validate_sql
+  |
+  +--> dry_run_query
   |
   +--> execute_read_query (read-only)
 ```
@@ -140,19 +154,48 @@ Open `backend/.env` and replace the placeholder key:
 ```env
 LLM_PROVIDER=auto
 LLM_API_KEYS=paste_your_real_api_key_here
-LLM_MODEL=
-LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
+LLM_MODEL=deepseek/deepseek-v4-pro
+LLM_FALLBACK_MODELS=
+LLM_BASE_URL=
 GEMINI_TIMEOUT_SECONDS=20
 QUERY_ROW_LIMIT=100
+MAX_UPLOAD_BYTES=5368709120
 ```
 
-`auto` recognizes Gemini (`AIza...`), Anthropic (`sk-ant-...`), and OpenAI
-(`sk-...`) keys. Set `LLM_PROVIDER` explicitly for unusual key formats. For an
-OpenAI-compatible service, also set `LLM_BASE_URL`.
+`auto` recognizes Gemini (`AIza...`), Anthropic (`sk-ant-...`), OpenRouter
+(`sk-or-...`), and OpenAI-compatible (`sk-...`) keys. Set `LLM_PROVIDER`
+explicitly for unusual key formats. For OpenRouter or another OpenAI-compatible
+service, also set `LLM_BASE_URL`.
+
+## What The Answer Looks Like
+
+The UI is designed for project managers, so answers avoid raw technical noise.
+
+For multi-row results, the app shows:
+
+- A short summary
+- A table with the most useful business columns
+- Key findings in bullets
+- Limitations when the data cannot support a stronger answer
+- Confidence score with a short "Why?" explanation
+
+Example:
+
+| Department | Employee Count |
+| --- | ---: |
+| TECHNICAL DEPARTMENT | 200 |
+| Execution | 145 |
+| NON-TECHNICAL | 105 |
+| STORES | 62 |
+
+The explanation tells the manager what the table means, such as staffing
+concentration, possible workload/cost follow-up, and whether the result is
+headcount only or true performance.
 
 ## MCP Server
 
-Set an absolute SQLite path in `backend/.env`:
+MCP tools can use an explicit database path, a session id, or the fallback path
+from `backend/.env`:
 
 ```env
 MCP_DATABASE_PATH=C:\absolute\path\to\database.sqlite
@@ -165,12 +208,34 @@ python backend\mcp_server.py
 ```
 
 Configure your MCP host to run that command from this project directory. MCP is
-independent of the LLM provider, so Claude, OpenAI, Gemini, or another MCP host
-can use the same tools.
+independent of the LLM provider, so Claude, OpenAI, Gemini, OpenRouter, or
+another MCP host can use the same tools.
 
 ## Redis Cache
 
-Redis is optional. To cache repeated answers:
+Redis is optional. It is used only for final answer caching, so repeated
+questions on the same database can skip the LLM call.
+
+Install/start Redis locally with Docker:
+
+```bash
+docker run -d --name sql-assistant-redis --restart unless-stopped -p 6379:6379 redis:7
+```
+
+Verify Redis is running:
+
+```bash
+docker ps
+docker exec sql-assistant-redis redis-cli ping
+```
+
+Expected output:
+
+```text
+PONG
+```
+
+Then set this in `backend/.env`:
 
 ```env
 REDIS_URL=redis://localhost:6379/0
@@ -181,11 +246,87 @@ When Redis is unavailable or `REDIS_URL` is blank, the app continues without
 caching. Cache entries are separated by question, database fingerprint,
 provider, and model.
 
+Backend logs show the cache behavior:
+
+```text
+Redis connected
+Cache MISS
+Cache STORE
+Cache HIT
+```
+
+To verify caching:
+
+1. Upload a database.
+2. Ask a question. The backend should log `Cache MISS`, call the LLM, then log
+   `Cache STORE`.
+3. Ask the same question again. The backend should log `Cache HIT`; no LLM call
+   is needed.
+4. Upload a different database and ask the same question. It should log
+   `Cache MISS` because the database fingerprint changed.
+
 Important:
 
 - Put real keys only in `backend/.env`.
 - Do not put real keys in `backend/.env.example`.
 - `backend/.env` is ignored by Git.
+
+## MySQL And SQL Server
+
+The Docker setup can run Redis, MySQL 8, and SQL Server 2022:
+
+```powershell
+docker compose up -d
+docker compose ps
+```
+
+MySQL is used for MySQL `.sql` dumps and for connecting to an existing allowed
+database. Upload mode streams the dump without loading the full file into
+memory. Connect mode attaches an already populated configured database within
+seconds.
+
+Set MySQL values in `backend/.env`:
+
+```env
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USERNAME=root
+MYSQL_PASSWORD=ChangeThisStrongPassword123!
+MYSQL_ALLOWED_DATABASES=
+```
+
+Leave `MYSQL_ALLOWED_DATABASES` blank in local development to list available
+databases. In a manager/demo environment, set it to a comma-separated allowlist.
+
+## SQL Server Live Imports
+
+Large SQL Server `.sql` dumps can be imported once into SQL Server and queried
+live instead of being converted to SQLite.
+
+Set these in `backend/.env`:
+
+```env
+SQLSERVER_IMPORT_SQL=1
+MSSQL_SA_PASSWORD=ChangeThisStrongPassword123!
+MSSQL_DATABASE=SqlAssistant
+SQLSERVER_HOST=127.0.0.1
+SQLSERVER_PORT=1433
+SQLSERVER_DATABASE=SqlAssistant
+SQLSERVER_USERNAME=sa
+SQLSERVER_PASSWORD=ChangeThisStrongPassword123!
+SQLSERVER_ENCRYPT=yes
+SQLSERVER_TRUST_CERT=yes
+REDIS_URL=redis://localhost:6379/0
+```
+
+For local backend runs, install Microsoft ODBC Driver 18 for SQL Server. Docker
+provides the SQL Server database; Python still needs the local ODBC driver to
+connect through `pyodbc`.
+
+When `SQLSERVER_IMPORT_SQL=1`, uploaded `.sql` files are treated as SQL Server
+dumps. The importer handles `GO` batch separators and rejects obvious
+MySQL/PostgreSQL/SQLite dump syntax. Duplicate dumps are skipped by file
+fingerprint.
 
 ## How To Run
 
@@ -221,8 +362,9 @@ http://localhost:5173
 Then:
 
 1. Click the chat button.
-2. Upload a `.db`, `.sqlite`, or `.sql` file.
-3. Ask a question about the database.
+2. Choose `Upload SQL Dump` or `Connect Existing`.
+3. Upload a `.db`, `.sqlite`, `.sqlite3`, or `.sql` file, or attach an existing MySQL database.
+4. Ask a question about the database.
 
 Example:
 
@@ -252,6 +394,16 @@ python -m compileall backend
 ```
 
 ## Common Errors
+
+**`Uploaded file is too large`**
+
+The default upload limit is 5 GB.
+
+Fix:
+
+- Increase `MAX_UPLOAD_BYTES` in `backend/.env` if your machine has enough disk
+  space.
+- Restart the backend after editing `.env`.
 
 **`LLM API key is not configured`**
 
@@ -290,13 +442,12 @@ Fix:
 npm run dev -- --host 127.0.0.1
 ```
 
-**Uploaded database disappeared**
-
-The active database is stored in memory.
+**Uploaded database disappeared after switching browser/session**
 
 Fix:
 
-- Re-upload the database after restarting the backend.
+- Each browser session is isolated by `session_id`.
+- Use the same browser session, re-upload the database, or connect to the existing MySQL database again.
 
 **SSL or certificate error when calling the LLM**
 
@@ -319,8 +470,10 @@ Fix:
 
 - The frontend never calls the LLM directly.
 - Only the FastAPI backend talks to the LLM provider.
-- Gemini, Anthropic, and OpenAI-compatible providers are supported.
+- Gemini, Anthropic, OpenRouter, and OpenAI-compatible providers are supported.
 - MCP exposes the database tools and is intentionally separate from provider selection.
+- Redis caches only final successful answers, not SQL generation.
+- SQL execution is read-only and validated before running.
 
 ## Author
 

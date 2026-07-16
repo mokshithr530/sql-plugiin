@@ -106,8 +106,69 @@ def test_analyze_question_returns_only_real_schema_objects(tmp_path):
         database_path=str(database),
     )
 
-    assert result["candidates"] == [
-        {"table": "people", "columns": ["salary"]}
-    ]
+    assert result["candidates"]
+    assert any(
+        table["table"] == "people"
+        for candidate in result["candidates"]
+        for table in candidate["tables"]
+    )
     schema = mcp_server.inspect_schema(database_path=str(database))
     assert "people" in schema["schema"]
+
+
+def test_mcp_utility_tools_are_bounded_and_schema_validated(tmp_path):
+    database = tmp_path / "sample.sqlite3"
+    _database(database, rows=12)
+
+    tables = mcp_server.list_tables(database_path=str(database))
+    profile = mcp_server.get_table_profile(
+        "people",
+        columns=["name", "salary"],
+        database_path=str(database),
+    )
+    sample = mcp_server.sample_rows(
+        "people",
+        limit=50,
+        database_path=str(database),
+    )
+
+    assert tables["tables"] == [{"table": "people", "row_count": 12}]
+    assert [column["column"] for column in profile["profile"]] == ["name", "salary"]
+    assert sample["row_count"] == mcp_server._SAMPLE_LIMIT
+
+    with pytest.raises(ValueError, match="Unknown table"):
+        mcp_server.sample_rows("missing", database_path=str(database))
+    with pytest.raises(ValueError, match="Unknown column"):
+        mcp_server.get_table_profile(
+            "people",
+            columns=["missing"],
+            database_path=str(database),
+        )
+
+
+def test_mcp_business_catalog_tools_are_dynamic(tmp_path):
+    database = tmp_path / "business.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE invoices (invoice_id INTEGER PRIMARY KEY, customer_id INTEGER, invoice_total INTEGER)"
+        )
+        connection.execute(
+            "CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, customer_name TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO invoices(customer_id, invoice_total) VALUES (?, ?)",
+            [(1, 100), (2, 200)],
+        )
+
+    overview = mcp_server.database_overview(database_path=str(database))
+    entities = mcp_server.discover_business_entities(database_path=str(database))
+    joins = mcp_server.discover_join_paths(database_path=str(database))
+    analysis = mcp_server.analyze_question(
+        "Which customers have the most revenue?",
+        database_path=str(database),
+    )
+
+    assert overview["table_count"] == 2
+    assert "customer" in entities["entities"]
+    assert joins["join_paths"]
+    assert analysis["candidates"]

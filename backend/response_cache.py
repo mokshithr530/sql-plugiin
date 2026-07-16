@@ -1,8 +1,8 @@
 import hashlib
 import json
 import logging
-import os
 import re
+from pathlib import Path
 
 from config import CACHE_TTL_SECONDS, LLM_MODEL, LLM_PROVIDER, REDIS_URL
 
@@ -24,44 +24,95 @@ class ResponseCache:
                     socket_timeout=1,
                 )
                 self.client.ping()
+                logger.info("Redis connected")
             except Exception as error:
-                logger.warning("Redis cache unavailable; continuing without cache: %s", error)
+                logger.warning(
+                    "Redis unavailable (caching disabled): %s",
+                    error,
+                )
                 self.client = None
+        else:
+            logger.info("Redis unavailable (caching disabled)")
 
-    def _key(self, question, database_path):
-        stat = os.stat(database_path)
-        normalized = re.sub(r"\s+", " ", question.strip().lower())
+    def normalize_question(self, question):
+        return re.sub(r"\s+", " ", question.strip().lower())
+
+    def database_fingerprint(self, database_path):
+        path = Path(database_path)
+        digest = hashlib.sha256()
+        with path.open("rb") as database_file:
+            for chunk in iter(lambda: database_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _key_for_identity(self, question, database_identity, provider=None, model=None):
+        normalized = self.normalize_question(question)
         identity = "|".join(
             [
-                os.path.abspath(database_path),
-                str(stat.st_size),
-                str(stat.st_mtime_ns),
-                LLM_PROVIDER,
-                LLM_MODEL,
+                database_identity,
                 normalized,
+                provider or LLM_PROVIDER,
+                model or LLM_MODEL,
             ]
         )
         return "sql-assistant:answer:" + hashlib.sha256(identity.encode()).hexdigest()
 
-    def get(self, question, database_path):
+    def _key(self, question, database_path, provider=None, model=None):
+        return self._key_for_identity(
+            question,
+            self.database_fingerprint(database_path),
+            provider,
+            model,
+        )
+
+    def get(self, question, database_path, provider=None, model=None):
+        return self.get_by_identity(
+            question,
+            self.database_fingerprint(database_path),
+            provider,
+            model,
+        )
+
+    def get_by_identity(self, question, database_identity, provider=None, model=None):
         if not self.client:
             return None
         try:
-            value = self.client.get(self._key(question, database_path))
+            value = self.client.get(
+                self._key_for_identity(question, database_identity, provider, model)
+            )
+            logger.info("Cache HIT" if value else "Cache MISS")
             return json.loads(value) if value else None
         except Exception as error:
             logger.warning("Redis cache read failed: %s", error)
             return None
 
-    def set(self, question, database_path, response):
+    def set(self, question, database_path, response, provider=None, model=None):
+        self.set_by_identity(
+            question,
+            self.database_fingerprint(database_path),
+            response,
+            provider,
+            model,
+        )
+
+    def set_by_identity(
+        self,
+        question,
+        database_identity,
+        response,
+        provider=None,
+        model=None,
+        ttl_seconds=CACHE_TTL_SECONDS,
+    ):
         if not self.client:
             return
         try:
             self.client.setex(
-                self._key(question, database_path),
-                CACHE_TTL_SECONDS,
+                self._key_for_identity(question, database_identity, provider, model),
+                ttl_seconds,
                 json.dumps(response),
             )
+            logger.info("Cache STORE")
         except Exception as error:
             logger.warning("Redis cache write failed: %s", error)
 

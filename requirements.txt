@@ -8,3 +8,6 @@ python-certifi-win32
 truststore
 mcp
 redis
+sqlalchemy
+pyodbc
+pymysql

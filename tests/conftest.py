@@ -15,11 +15,15 @@ if str(BACKEND) not in sys.path:
 @pytest.fixture(autouse=True)
 def clean_backend_state():
     from database_manager import db_manager
+    from response_cache import response_cache
     from session_memory import session_memory
+
+    response_cache.client = None
 
     yield
 
     db_manager.disconnect()
+    response_cache.client = None
     session_memory.reset()
 
 

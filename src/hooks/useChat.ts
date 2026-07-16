@@ -39,7 +39,7 @@ export function useChat() {
                     content: response.success
                         ? response.answer
                         : `${response.answer}\n\nYou can also try asking the same question with more specific table or column words.`,
-                    metrics: response.metrics
+                    response
                 }
             ]);
         } catch (err) {
